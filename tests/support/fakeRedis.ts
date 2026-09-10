@@ -70,6 +70,17 @@ export class FakeRedis implements RedisLike {
     return 1;
   }
 
+  async hget(key: string, field: string): Promise<unknown> {
+    const value = this.hash(key)?.get(field);
+    return value === undefined ? null : decode(value);
+  }
+
+  /** Redis's own vocabulary: -2 for a missing key, -1 for one with no expiry. */
+  async ttl(key: string): Promise<number> {
+    if (!this.data.has(key)) return -2;
+    return this.ttls.get(key) ?? -1;
+  }
+
   async hgetall(key: string): Promise<Record<string, unknown> | null> {
     const hash = this.hash(key);
     if (!hash || hash.size === 0) return null;
@@ -144,6 +155,10 @@ export class FakeRedis implements RedisLike {
       },
       hgetall: (key) => {
         queued.push(() => this.hgetall(key));
+        return pipeline;
+      },
+      ttl: (key) => {
+        queued.push(() => this.ttl(key));
         return pipeline;
       },
       expire: (key, seconds) => {

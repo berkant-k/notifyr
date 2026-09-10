@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Redis } from "@upstash/redis";
-import { RedisStore } from "@/lib/redisStore";
+import { DEFAULT_ENDPOINT_TTL_SECONDS, endpointTtlSeconds, RedisStore } from "@/lib/redisStore";
 import { createStore, InMemoryStore, type MessageStore } from "@/lib/store";
 
 import { FakeRedis } from "./support/fakeRedis";
@@ -78,6 +78,19 @@ describe.each(implementations)("$name store", ({ create }) => {
       expect(await store.getEndpoint("nope")).toBeNull();
       expect(await store.getSnapshot("nope")).toBeNull();
       expect(await store.addMessage("nope", message())).toBeNull();
+    });
+
+    // The poll path. It has to agree with the snapshot, or a dashboard either
+    // never refreshes or refreshes forever.
+    it("reports the version without a snapshot", async () => {
+      const { id } = await newEndpoint();
+      expect(await store.getVersion(id)).toBe(0);
+
+      await store.addMessage(id, message());
+      expect(await store.getVersion(id)).toBe(1);
+      expect(await store.getVersion(id)).toBe((await store.getSnapshot(id))?.endpoint.version);
+
+      expect(await store.getVersion("nope")).toBeNull();
     });
   });
 
@@ -453,5 +466,75 @@ describe.skipIf(!liveUrl || !liveToken)("live Upstash", () => {
 
     expect(await redis.ttl(`endpoint:${id}`)).toBeGreaterThan(0);
     expect(await redis.ttl(`endpoint:${id}:messages`)).toBeGreaterThan(0);
+  });
+});
+
+describe("endpoint lifetime", () => {
+  const VAR = "NOTIFYR_ENDPOINT_TTL_SECONDS";
+  const saved = process.env[VAR];
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env[VAR];
+    else process.env[VAR] = saved;
+  });
+
+  it("defaults to four hours", () => {
+    delete process.env[VAR];
+    expect(endpointTtlSeconds()).toBe(4 * 60 * 60);
+    expect(DEFAULT_ENDPOINT_TTL_SECONDS).toBe(14_400);
+  });
+
+  it("takes a deployment's own value", () => {
+    process.env[VAR] = "900";
+    expect(endpointTtlSeconds()).toBe(900);
+  });
+
+  it("clamps rather than trusting: a minute to a week", () => {
+    process.env[VAR] = "5";
+    expect(endpointTtlSeconds()).toBe(60);
+    process.env[VAR] = "99999999";
+    expect(endpointTtlSeconds()).toBe(7 * 24 * 60 * 60);
+  });
+
+  // A public instance that will not boot is a worse answer to a typo than one
+  // that runs on the default clock.
+  it("falls back to the default for nonsense", () => {
+    for (const value of ["", "   ", "soon", "12.5", "-1e9x"]) {
+      process.env[VAR] = value;
+      expect(endpointTtlSeconds()).toBe(DEFAULT_ENDPOINT_TTL_SECONDS);
+    }
+  });
+
+  it("gives Redis endpoints a deadline, and in-memory ones none", async () => {
+    process.env[VAR] = "3600";
+
+    const redis = new RedisStore(new FakeRedis());
+    const endpoint = (await redis.createEndpoint())!;
+    expect(endpoint.expiresAt).not.toBeNull();
+
+    const ms = Date.parse(endpoint.expiresAt!) - Date.now();
+    expect(ms).toBeGreaterThan(3_590_000);
+    expect(ms).toBeLessThanOrEqual(3_600_000);
+
+    // And it survives a round trip, rather than only being set on the way out.
+    expect((await redis.getSnapshot(endpoint.id))?.endpoint.expiresAt).not.toBeNull();
+
+    // Nothing in memory expires: the cap there is a count, not a clock.
+    expect((await new InMemoryStore().createEndpoint())!.expiresAt).toBeNull();
+  });
+
+  it("pushes the deadline out on writes, but not on a version check", async () => {
+    process.env[VAR] = "3600";
+    const fake = new FakeRedis();
+    const redis = new RedisStore(fake);
+    const { id } = (await redis.createEndpoint())!;
+
+    fake.ttls.set(`endpoint:${id}`, 5);
+    await redis.getVersion(id);
+    // A dashboard asking "anything new?" must not keep a dead endpoint alive.
+    expect(fake.ttls.get(`endpoint:${id}`)).toBe(5);
+
+    await redis.addMessage(id, message());
+    expect(fake.ttls.get(`endpoint:${id}`)).toBe(3600);
   });
 });

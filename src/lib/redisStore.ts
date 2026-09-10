@@ -51,11 +51,14 @@ export interface RedisPipelineLike {
   lrange(key: string, start: number, stop: number): RedisPipelineLike;
   hgetall(key: string): RedisPipelineLike;
   expire(key: string, seconds: number): RedisPipelineLike;
+  ttl(key: string): RedisPipelineLike;
   exec(): Promise<unknown[]>;
 }
 
 export interface RedisLike {
   hsetnx(key: string, field: string, value: string): Promise<number>;
+  hget(key: string, field: string): Promise<unknown>;
+  ttl(key: string): Promise<number>;
   hgetall(key: string): Promise<Record<string, unknown> | null>;
   hset(key: string, kv: Record<string, string | number>): Promise<number>;
   hdel(key: string, field: string): Promise<number>;
@@ -64,11 +67,39 @@ export interface RedisLike {
 }
 
 /**
- * An hour with no traffic. This is endpoint expiry: abandoned endpoints stop
- * holding stored `x-forwarded-for` values indefinitely, which is a retention
- * question as much as a capacity one.
+ * Four hours with nothing happening. This is endpoint expiry: abandoned
+ * endpoints stop holding stored `x-forwarded-for` values indefinitely, which
+ * is a retention question as much as a capacity one.
+ *
+ * Four rather than one because the unit of use is a debugging session — you
+ * point a server at an endpoint, go and change something, come back — and an
+ * endpoint that dies over a long lunch is worse than one that lingers.
  */
-export const TTL_SECONDS = 3600;
+export const DEFAULT_ENDPOINT_TTL_SECONDS = 4 * 60 * 60;
+
+/** A minute is the shortest useful session; a week is longer than any. */
+const MIN_ENDPOINT_TTL_SECONDS = 60;
+const MAX_ENDPOINT_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+/**
+ * How long an endpoint survives without traffic, from
+ * `NOTIFYR_ENDPOINT_TTL_SECONDS`.
+ *
+ * Read per call rather than at import: a serverless instance is long-lived and
+ * a value cached at module scope would outlive a configuration change by
+ * however long that instance happens to stick around. Nonsense falls back to
+ * the default rather than throwing — a public instance that will not boot is a
+ * worse answer to a typo than one that expires endpoints on the default clock.
+ */
+export function endpointTtlSeconds(): number {
+  const raw = process.env.NOTIFYR_ENDPOINT_TTL_SECONDS;
+  if (raw === undefined || raw.trim() === "") return DEFAULT_ENDPOINT_TTL_SECONDS;
+
+  const seconds = Number(raw);
+  if (!Number.isInteger(seconds)) return DEFAULT_ENDPOINT_TTL_SECONDS;
+
+  return Math.min(Math.max(seconds, MIN_ENDPOINT_TTL_SECONDS), MAX_ENDPOINT_TTL_SECONDS);
+}
 
 /** Matches the in-memory store: one endpoint is normally one subscription. */
 const MAX_TRACKED_SUBSCRIPTIONS = 20;
@@ -88,14 +119,33 @@ export class RedisStore implements MessageStore {
     // requests land on different instances.
     if ((await this.redis.hsetnx(key, "id", endpoint.id)) === 0) return null;
 
-    await this.redis.pipeline().hset(key, toHash(endpoint)).expire(key, TTL_SECONDS).exec();
+    const ttl = endpointTtlSeconds();
+    await this.redis.pipeline().hset(key, toHash(endpoint)).expire(key, ttl).exec();
 
-    return endpoint;
+    return { ...endpoint, expiresAt: new Date(Date.now() + ttl * 1000).toISOString() };
   }
 
   async getEndpoint(endpointId: string): Promise<Endpoint | null> {
-    const hash = await this.redis.hgetall(endpointKey(endpointId));
-    return hash && hash.id !== undefined ? fromHash(hash) : null;
+    const key = endpointKey(endpointId);
+    const [hash, ttl] = (await this.redis.pipeline().hgetall(key).ttl(key).exec()) as [
+      Record<string, unknown> | null,
+      number,
+    ];
+
+    return hash && hash.id !== undefined ? fromHash(hash, ttl) : null;
+  }
+
+  /**
+   * The whole of an idle poll: one command, no message list, no deserialising.
+   *
+   * Separate from `getSnapshot` because a dashboard asking "anything new?"
+   * every two seconds is the dominant cost of running this, and because it must
+   * *not* push the TTL out — an endpoint nobody is sending to should expire on
+   * schedule however many tabs are watching it.
+   */
+  async getVersion(endpointId: string): Promise<number | null> {
+    const version = await this.redis.hget(endpointKey(endpointId), "version");
+    return version === null || version === undefined ? null : numberFrom(version);
   }
 
   async addMessage(endpointId: string, input: NewMessage): Promise<Message | null> {
@@ -118,8 +168,8 @@ export class RedisStore implements MessageStore {
       pipeline.hincrby(key, countField(message.notificationType), 1);
     }
     pipeline.hincrby(key, "version", 1);
-    pipeline.expire(key, TTL_SECONDS);
-    pipeline.expire(messagesKey(endpointId), TTL_SECONDS);
+    pipeline.expire(key, endpointTtlSeconds());
+    pipeline.expire(messagesKey(endpointId), endpointTtlSeconds());
 
     await pipeline.exec();
     return message;
@@ -131,12 +181,15 @@ export class RedisStore implements MessageStore {
   ): Promise<EndpointSnapshot | null> {
     // One round trip, and the TTL refresh rides along in it. Traffic is not the
     // only sign an endpoint is alive; somebody watching it counts too.
+    // The TTL read comes after the refresh, so the caller is told the deadline
+    // this fetch just created rather than the one it replaced.
     const results = await this.redis
       .pipeline()
       .hgetall(endpointKey(endpointId))
       .lrange(messagesKey(endpointId), 0, limit - 1)
-      .expire(endpointKey(endpointId), TTL_SECONDS)
-      .expire(messagesKey(endpointId), TTL_SECONDS)
+      .expire(endpointKey(endpointId), endpointTtlSeconds())
+      .expire(messagesKey(endpointId), endpointTtlSeconds())
+      .ttl(endpointKey(endpointId))
       .exec();
 
     const hash = results[0] as Record<string, unknown> | null;
@@ -146,7 +199,7 @@ export class RedisStore implements MessageStore {
     // so "snapshots must not alias live state" holds by construction here.
     const raw = (results[1] ?? []) as unknown[];
     return {
-      endpoint: fromHash(hash),
+      endpoint: fromHash(hash, results[4] as number),
       messages: raw.map((entry) => parseJson<Message>(entry)).filter((m): m is Message => m !== null),
     };
   }
@@ -171,7 +224,7 @@ export class RedisStore implements MessageStore {
     // Bump the version even for an empty patch, so a caller that sent one still
     // sees a consistent snapshot rather than a stale-looking one.
     pipeline.hincrby(key, "version", 1);
-    pipeline.expire(key, TTL_SECONDS);
+    pipeline.expire(key, endpointTtlSeconds());
     await pipeline.exec();
 
     return this.getEndpoint(endpointId);
@@ -188,7 +241,7 @@ export class RedisStore implements MessageStore {
     if (expected === null) await this.redis.hdel(key, "expectedPayloadContent");
     else await this.redis.hset(key, { expectedPayloadContent: expected });
 
-    await this.redis.pipeline().hincrby(key, "version", 1).expire(key, TTL_SECONDS).exec();
+    await this.redis.pipeline().hincrby(key, "version", 1).expire(key, endpointTtlSeconds()).exec();
 
     return this.getEndpoint(endpointId);
   }
@@ -210,7 +263,7 @@ export class RedisStore implements MessageStore {
         continuity: JSON.stringify(continuity),
       })
       .hincrby(key, "version", 1)
-      .expire(key, TTL_SECONDS)
+      .expire(key, endpointTtlSeconds())
       .exec();
 
     return this.getEndpoint(endpointId);
@@ -260,6 +313,8 @@ function newEndpoint(id: string): Endpoint {
     heartbeatPeriodSeconds: DEFAULT_HEARTBEAT_PERIOD_SECONDS,
     continuity: [],
     version: 0,
+    // Filled in by the caller once the TTL it wrote is known.
+    expiresAt: null,
   };
 }
 
@@ -289,8 +344,14 @@ function toHash(endpoint: Endpoint): Record<string, string | number> {
   return hash;
 }
 
-/** The inverse of `toHash`, and the only other place field names are known. */
-function fromHash(hash: Record<string, unknown>): Endpoint {
+/**
+ * The inverse of `toHash`, and the only other place field names are known.
+ *
+ * `ttl` is whatever Redis last said about the key: seconds remaining, or one
+ * of its two negatives — -1 for a key with no expiry set, -2 for one that is
+ * already gone. Both become a null `expiresAt`, since neither names a moment.
+ */
+function fromHash(hash: Record<string, unknown>, ttl: number): Endpoint {
   const notificationCounts = emptyNotificationCounts();
   for (const type of NOTIFICATION_TYPES) {
     notificationCounts[type] = numberFrom(hash[countField(type)]);
@@ -307,6 +368,7 @@ function fromHash(hash: Record<string, unknown>): Endpoint {
   return {
     id: String(hash.id),
     createdAt: String(hash.createdAt),
+    expiresAt: ttl > 0 ? new Date(Date.now() + ttl * 1000).toISOString() : null,
     validCount: numberFrom(hash.validCount),
     invalidCount: numberFrom(hash.invalidCount),
     notificationCounts,

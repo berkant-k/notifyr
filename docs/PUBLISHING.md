@@ -55,8 +55,9 @@ endpoint expiry, and the same connection does rate limiting.
       exists — and it becomes *load-bearing*, because the 500-endpoint cap it
       used to share the job with goes away with the in-memory store.
 - [x] **3. Endpoint expiry.** Done for a Redis deployment: every key carries a
-      one-hour TTL, refreshed on writes and on snapshot reads, so an endpoint
-      expires an hour after both its traffic and its audience stop. This was
+      four-hour TTL (`NOTIFYR_ENDPOINT_TTL_SECONDS` to change it), refreshed
+      on writes and on dashboard loads but *not* on the idle poll, so an
+      endpoint expires four hours after both its traffic and its audience stop. This was
       always a retention question as much as a capacity one — stored headers
       include `x-forwarded-for`, which is personal data — and it is why the
       Redis store has no equivalent of the in-memory `MAX_ENDPOINTS` cap. The
@@ -76,10 +77,11 @@ endpoint expiry, and the same connection does rate limiting.
 
 ## Worth doing, not blocking
 
-- [ ] **6. Show endpoint age and the memory caveat on the dashboard**
-      ([UI-REVIEW #19](UI-REVIEW.md)). `Endpoint.createdAt` is stored and never
-      displayed. On a public instance whose data dies with the process, saying
-      so where the data is shown is plain honesty.
+- [x] **6. Show endpoint age and the memory caveat on the dashboard**
+      ([UI-REVIEW #19](UI-REVIEW.md)). Done: the endpoint card carries "Created
+      8s ago" and either a live countdown to expiry or, on the in-memory store,
+      "Expires when the server restarts" — the caveat stated where the URL is
+      handed out rather than in a footnote.
 - [ ] **7. Band the list when polling has backed off**
       ([UI-REVIEW #20](UI-REVIEW.md)). A stale list currently looks live; the
       indicator says "Reconnecting…" but the rows do not.

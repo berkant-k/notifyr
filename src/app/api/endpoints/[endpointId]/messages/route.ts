@@ -16,6 +16,12 @@ export const dynamic = "force-dynamic";
  * endpoint's current version, the response is a few bytes saying "nothing
  * changed" — the client then skips the state update entirely, so an idle
  * dashboard never re-renders.
+ *
+ * That answer is reached without reading a snapshot, which matters twice over
+ * on a shared store: it is one command rather than five on a metered plan, and
+ * it leaves the endpoint's TTL alone. Fetching a snapshot to say "nothing
+ * changed" would push the deadline out on every poll, so an endpoint nobody
+ * sends to would never expire while a forgotten tab was open.
  */
 export async function GET(
   request: Request,
@@ -23,19 +29,30 @@ export async function GET(
 ) {
   const { endpointId } = await params;
   const query = new URL(request.url).searchParams;
+  const since = query.get("since");
+
+  if (since !== null) {
+    const version = await store.getVersion(endpointId);
+    if (version === null) {
+      return NextResponse.json({ error: "Endpoint not found" }, { status: 404 });
+    }
+    if (Number(since) === version) {
+      const unchanged: MessagesResponse = { changed: false, version };
+      return NextResponse.json(unchanged, { headers: { "Cache-Control": "no-store" } });
+    }
+  }
+
   const snapshot = await store.getSnapshot(endpointId, limitFrom(query.get("limit")));
 
   if (!snapshot) {
     return NextResponse.json({ error: "Endpoint not found" }, { status: 404 });
   }
 
-  const version = snapshot.endpoint.version;
-  const since = query.get("since");
-
-  const body: MessagesResponse =
-    since !== null && Number(since) === version
-      ? { changed: false, version }
-      : { changed: true, version, ...snapshot };
+  const body: MessagesResponse = {
+    changed: true,
+    version: snapshot.endpoint.version,
+    ...snapshot,
+  };
 
   return NextResponse.json(body, { headers: { "Cache-Control": "no-store" } });
 }

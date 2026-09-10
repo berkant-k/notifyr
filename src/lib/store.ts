@@ -45,6 +45,12 @@ export interface MessageStore {
    */
   createEndpoint(id?: string): Promise<Endpoint | null>;
   getEndpoint(endpointId: string): Promise<Endpoint | null>;
+  /**
+   * Just the version, for a dashboard asking "anything new?" — the answer is
+   * no on almost every poll, and fetching a whole snapshot to discover that is
+   * the dominant cost of running this on a metered store. Null when unknown.
+   */
+  getVersion(endpointId: string): Promise<number | null>;
   /** Returns null when the endpoint does not exist. */
   addMessage(endpointId: string, message: NewMessage): Promise<Message | null>;
   /** Returns null when the endpoint does not exist. */
@@ -116,6 +122,10 @@ export class InMemoryStore implements MessageStore {
     const endpoint: Endpoint = {
       id: id ?? randomEndpointId(),
       createdAt: new Date().toISOString(),
+      // Nothing expires here: this store bounds itself with MAX_ENDPOINTS, and
+      // the process it lives in is the real deadline. Null says "no moment to
+      // name" rather than "never", which the dashboard renders as the caveat.
+      expiresAt: null,
       validCount: 0,
       invalidCount: 0,
       notificationCounts: emptyNotificationCounts(),
@@ -132,6 +142,10 @@ export class InMemoryStore implements MessageStore {
 
   async getEndpoint(endpointId: string): Promise<Endpoint | null> {
     return this.endpoints.get(endpointId) ?? null;
+  }
+
+  async getVersion(endpointId: string): Promise<number | null> {
+    return this.endpoints.get(endpointId)?.version ?? null;
   }
 
   async addMessage(endpointId: string, input: NewMessage): Promise<Message | null> {

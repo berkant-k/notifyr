@@ -47,7 +47,7 @@ structurally:
 | `version` bumps drive the dashboard poll | `HINCRBY` in the same pipeline as the write it describes |
 | Snapshots must not alias live state | Free. Deserialising is a copy; `getSnapshot`'s `structuredClone` calls exist only for the in-memory implementation |
 | At most 20 tracked subscriptions, most recent first | One JSON field, ordered, capped on write |
-| **Endpoint expiry (item 3)** | `EXPIRE` on every write. The TTL that item wanted, at no extra cost |
+| **Endpoint expiry (item 3)** | `EXPIRE` on every write. The TTL that item wanted, at no extra cost — four hours by default, `NOTIFYR_ENDPOINT_TTL_SECONDS` to change it |
 | **Rate limiting (item 2)** | `INCR` + `EXPIRE`, same connection, no second dependency |
 
 Postgres would do all of this too, with a hand-rolled trimming query, a
@@ -58,7 +58,10 @@ ephemeral and never queried by anything but primary key.
 
 `POLL_INTERVAL_MS` is 2000 and the loop pauses on `visibilitychange`
 (`useEndpointPoll.ts`), so the unit of cost is **one visible dashboard-hour =
-1,800 polls**. A poll that finds nothing new is a single `HGET`.
+1,800 polls**. A poll that finds nothing new is a single `HGET`, via
+`getVersion` — which is the whole reason that method exists. The route used to
+read a full snapshot before comparing versions, which was five commands to say
+"nothing changed", and quietly pushed the TTL out on every poll as well.
 
 | Budget | Free allowance | Visible dashboard-hours |
 | --- | --- | --- |
@@ -101,10 +104,10 @@ items 1 and 2 want doing in the same sitting.
 | Method | Commands | Round trips |
 | --- | --- | --- |
 | `createEndpoint` | `HSETNX`, then `HSET` + `EXPIRE` | 2 |
-| `getEndpoint` | `HGETALL` | 1 |
+| `getEndpoint` | `HGETALL` + `TTL`, pipelined | 1 |
+| `getVersion` (the idle poll) | `HGET version` | 1 |
 | `addMessage` | `EXISTS`, then `LPUSH` + `LTRIM` + 2-3 x `HINCRBY` + 2 x `EXPIRE` | 2 |
-| `getSnapshot` | `HGETALL` + `LRANGE` + 2 x `EXPIRE`, pipelined | 1 |
-| poll with `?since=` | `HGET version` | 1 |
+| `getSnapshot` | `HGETALL` + `LRANGE` + 2 x `EXPIRE` + `TTL`, pipelined | 1 |
 | `updateResponseRules` | `HSET` (one field per patched type) + `HINCRBY version` | 1 |
 | `updateExpectedPayloadContent` | `HSET` or `HDEL`, + `HINCRBY version` | 1 |
 | `updateHeartbeatPeriod` | `HGETALL`, then `HSET` + `HINCRBY version` + `EXPIRE` | 2 |
@@ -154,9 +157,19 @@ so on), so `updateResponseRules` is a partial `HSET` rather than a
 read-merge-write. Two dashboards toggling different switches cannot clobber each
 other — an improvement on the in-memory store, which merges a whole object.
 
-**The TTL is refreshed on writes and on snapshot reads**, so an endpoint someone
-is actively watching does not expire under them. The `?since=` fast path does
-not refresh; see "Still open".
+**The TTL is refreshed on writes and on snapshot reads, and deliberately not on
+the idle poll.** Those are the two halves of one rule: an endpoint stays alive
+while traffic arrives *or* while someone loads its dashboard, and dies four
+hours after both stop. Refreshing on the `?since=` path instead would mean a
+forgotten tab keeps an endpoint — and its stored `x-forwarded-for` values —
+alive forever, which is the retention problem the TTL exists to solve. It would
+also freeze the countdown the dashboard now shows.
+
+**`expiresAt` is read, not assumed.** `getSnapshot` pipelines a `TTL` after
+its two `EXPIRE`s, so the deadline the dashboard counts down to is the one
+that fetch just created, and it stays right even if a key was written by an
+older deployment on a different clock. `-1` (no expiry) and `-2` (already
+gone) both become `null`, since neither names a moment.
 
 Selecting the implementation is credentials, not configuration:
 
@@ -216,11 +229,10 @@ Steps 1 and 2 are done; step 3 is an hour once the connection exists.
 
 ## Still open
 
-- **Does a poll refresh the TTL?** As sketched, only a full snapshot fetch does,
-  not the `?since=` fast path — refreshing on every poll would double the
-  binding budget. A dashboard left open on a completely silent endpoint for a
-  full hour would therefore watch it expire. That is also, almost exactly, the
-  definition of an abandoned endpoint.
+- ~~**Does a poll refresh the TTL?**~~ Settled: no. A dashboard left open on a
+  silent endpoint watches it count down and expire, which is almost exactly the
+  definition of an abandoned endpoint — and the countdown on the endpoint card
+  means that happens in front of you rather than behind your back.
 - **`getSnapshot` now reads only what the caller asked for.** `LRANGE` takes the
   limit, where the in-memory store always held all 100 and sliced. Nothing
   observable changes, but DESIGN.md's retention section describes the old shape.

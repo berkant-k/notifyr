@@ -27,6 +27,38 @@ export function relativeLabel(iso: string, nowMs: number): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+/**
+ * Time left before an endpoint expires: "3h 58m", "42m", "4:07", "expired".
+ *
+ * The granularity tightens as the deadline approaches, and that is not only
+ * cosmetic — this label is what `useEndpointPoll` watches to decide whether
+ * anything on screen would look different. Minutes while there are hours left
+ * means an idle dashboard redraws once a minute; seconds in the last five
+ * minutes means it redraws every second exactly when that is the number
+ * somebody is watching.
+ *
+ * Empty string for an endpoint with no deadline: a store that never expires
+ * anything has nothing to count down.
+ */
+export function countdownLabel(iso: string | null, nowMs: number): string {
+  if (iso === null) return "";
+
+  const parsed = Date.parse(iso);
+  if (Number.isNaN(parsed)) return "";
+
+  const seconds = Math.round((parsed - nowMs) / 1000);
+  if (seconds <= 0) return "expired";
+
+  const minutes = Math.floor(seconds / 60);
+  if (minutes >= 60) {
+    const hours = Math.floor(minutes / 60);
+    return `${hours}h ${minutes % 60}m`;
+  }
+  if (minutes >= 5) return `${minutes}m`;
+
+  return `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
 /** Clock time only: 14:22:30. */
 export function clockTime(iso: string): string {
   return new Date(iso).toLocaleTimeString("en-GB", { hour12: false });

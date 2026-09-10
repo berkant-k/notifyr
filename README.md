@@ -344,8 +344,11 @@ it, and see [SECURITY.md](SECURITY.md) for reporting.
   locally; a real deployment needs a shared store first. `MessageStore` in
   `src/lib/store.ts` is the seam — every method is already async.
 - **No rate limiting yet.**
-- **Retention:** 100 messages per endpoint (10 shown), 500 endpoints, 1 MB body
-  cap. Counters are cumulative and unaffected by trimming.
+- **Retention:** 100 messages per endpoint (10 shown), 1 MB body cap. Counters
+  are cumulative and unaffected by trimming. With a shared store an endpoint
+  expires four hours after its last traffic — the dashboard shows the countdown
+  — configurable with `NOTIFYR_ENDPOINT_TTL_SECONDS`; in memory nothing
+  expires and the bound is 500 endpoints, oldest evicted.
 
 ## Development
 

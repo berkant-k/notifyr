@@ -253,6 +253,16 @@ export interface Endpoint {
   id: string;
   /** ISO 8601, always UTC. */
   createdAt: string;
+  /**
+   * When this endpoint is discarded if nothing further happens to it, ISO 8601.
+   *
+   * Null when the store does not expire endpoints at all — the in-memory one
+   * bounds itself with a count instead, so there is no moment to name. The
+   * value moves: every write, and every full dashboard fetch, pushes it out
+   * again, so it is "expires at" rather than "expired at" only for as long as
+   * nobody is looking and nothing is arriving.
+   */
+  expiresAt: string | null;
   /** Cumulative across the endpoint's lifetime, not just the retained messages. */
   validCount: number;
   invalidCount: number;

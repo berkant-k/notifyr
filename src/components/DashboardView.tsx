@@ -223,7 +223,13 @@ export default function DashboardView({
         </div>
 
         <aside className="space-y-4 lg:h-full lg:w-80 lg:shrink-0 lg:overflow-y-auto">
-          <EndpointCard webhookUrl={webhookUrl} guideHref={`/dashboard/${endpointId}/guide`} />
+          <EndpointCard
+            webhookUrl={webhookUrl}
+            guideHref={`/dashboard/${endpointId}/guide`}
+            createdAt={snapshot?.endpoint.createdAt ?? null}
+            expiresAt={snapshot?.endpoint.expiresAt ?? null}
+            nowMs={nowMs}
+          />
 
           {snapshot && (
             <ResponseRulesCard

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { overdueKey } from "@/lib/continuity";
-import { relativeKey } from "@/lib/time";
+import { countdownLabel, relativeKey, relativeLabel } from "@/lib/time";
 import type { EndpointSnapshot, MessagesResponse } from "@/lib/types";
 
 /**
@@ -130,6 +130,12 @@ export function useEndpointPoll(endpointId: string, limit?: number): EndpointPol
               current.messages.map((message) => message.receivedAt),
               at,
             ),
+            // The endpoint's own clocks. The countdown coarsens with distance,
+            // so a dashboard with hours left redraws once a minute and one in
+            // its last five minutes redraws every second — which is the only
+            // point at which anybody is reading the seconds.
+            relativeLabel(current.endpoint.createdAt, at),
+            countdownLabel(current.endpoint.expiresAt, at),
           ].join("~");
           if (key !== overdue) {
             overdue = key;
