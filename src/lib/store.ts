@@ -80,6 +80,16 @@ export interface MessageStore {
    */
   updateHeartbeatPeriod(endpointId: string, seconds: number): Promise<Endpoint | null>;
   /**
+   * Set the `Subscription.end` arrivals are checked against, already normalised
+   * to a UTC instant, or null to switch the check off. Returns null when the
+   * endpoint is unknown.
+   *
+   * Unlike the heartbeat period this clears nothing: `afterEndCount` counts
+   * notifications that did arrive after a deadline that was in force at the
+   * time, and a later correction does not un-receive them.
+   */
+  updateExpectedEnd(endpointId: string, expectedEnd: string | null): Promise<Endpoint | null>;
+  /**
    * Fold one validated notification into its subscription's continuity record,
    * returning whatever that revealed — a late heartbeat, a jump in the event
    * counter — for the caller to store on the message.
@@ -132,6 +142,11 @@ export class InMemoryStore implements MessageStore {
       responseRules: defaultResponseRules(),
       expectedPayloadContent: null,
       heartbeatPeriodSeconds: DEFAULT_HEARTBEAT_PERIOD_SECONDS,
+      // No default deadline: unlike the heartbeat period there is no
+      // conventional value to assume, and guessing one would report every
+      // notification as late on an endpoint nobody had configured.
+      expectedEnd: null,
+      afterEndCount: 0,
       continuity: [],
       version: 0,
     };
@@ -162,6 +177,10 @@ export class InMemoryStore implements MessageStore {
 
     if (message.isValid) endpoint.validCount += 1;
     else endpoint.invalidCount += 1;
+
+    // Judged by the caller against the deadline in force when it arrived, and
+    // counted here so the tally survives the message being trimmed away.
+    if (message.afterExpectedEnd) endpoint.afterEndCount += 1;
 
     // Only valid notifications are tallied by type: a Bundle that failed
     // validation has not established what kind of notification it was.
@@ -237,6 +256,20 @@ export class InMemoryStore implements MessageStore {
       responseRules: structuredClone(endpoint.responseRules),
       continuity: structuredClone(endpoint.continuity),
     };
+  }
+
+  async updateExpectedEnd(
+    endpointId: string,
+    expectedEnd: string | null,
+  ): Promise<Endpoint | null> {
+    const endpoint = this.endpoints.get(endpointId);
+    if (!endpoint) return null;
+
+    endpoint.expectedEnd = expectedEnd;
+    // afterEndCount is deliberately left alone; see the interface.
+    endpoint.version += 1;
+
+    return { ...endpoint, responseRules: structuredClone(endpoint.responseRules) };
   }
 
   async recordContinuity(

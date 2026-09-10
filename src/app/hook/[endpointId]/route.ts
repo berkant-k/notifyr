@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { checkExpectedEnd, isAfterExpectedEnd } from "@/lib/expiry";
 import { captureHeaders } from "@/lib/headers";
 import { mustOmitBody, overrideFor } from "@/lib/responseRules";
 import { store } from "@/lib/store";
@@ -42,6 +43,13 @@ export async function POST(
   // changing it later cannot re-grade what has already arrived.
   const result = validateBody(rawBody, contentType, endpoint.expectedPayloadContent);
 
+  // Arrival against Subscription.end. Read at receive time like the payload
+  // expectation, and applied to every message rather than only valid ones: this
+  // is measured from the clock, not from the body, so an unparseable POST an
+  // hour past the end is still a server that has not stopped.
+  const afterExpectedEnd = isAfterExpectedEnd(endpoint.expectedEnd, receivedAt);
+  const expiryFindings = checkExpectedEnd(endpoint.expectedEnd, receivedAt);
+
   // Continuity is the one check that needs more than this request: a gap is
   // only visible against what came before. Recorded before the message is
   // stored, so its findings travel with the notification that revealed them.
@@ -70,6 +78,7 @@ export async function POST(
     statusOverridden: override !== null,
     expectedPayloadContent:
       result.notificationType === "event-notification" ? endpoint.expectedPayloadContent : null,
+    afterExpectedEnd,
     summary: result.summary,
     contentType,
     notificationType: result.notificationType,
@@ -77,7 +86,7 @@ export async function POST(
     topic: result.topic,
     headers: captureHeaders(request),
     rawBody,
-    validationErrors: [...result.validationErrors, ...continuityFindings],
+    validationErrors: [...result.validationErrors, ...continuityFindings, ...expiryFindings],
   });
 
   // 204, 205 and 304 must carry no body at all; NextResponse.json would throw.

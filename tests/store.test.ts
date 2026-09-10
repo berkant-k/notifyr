@@ -18,6 +18,7 @@ function message(overrides: Partial<NewMessage> = {}): NewMessage {
     topic: null,
     statusOverridden: false,
     expectedPayloadContent: null,
+    afterExpectedEnd: false,
     headers: [
       { name: "content-type", value: "application/fhir+json", sensitive: false, platform: false },
     ],
@@ -246,6 +247,68 @@ describe.each(implementations)("$name store", ({ create }) => {
 
     it("returns null for an unknown endpoint", async () => {
       expect(await store.updateExpectedPayloadContent("nope", "empty")).toBeNull();
+    });
+  });
+
+  describe("expected end", () => {
+    const END = "2026-09-10T18:30:00.000Z";
+
+    it("starts unset and round-trips an instant", async () => {
+      const { id } = await newEndpoint();
+      expect((await store.getEndpoint(id))?.expectedEnd).toBeNull();
+
+      await store.updateExpectedEnd(id, END);
+      expect((await store.getEndpoint(id))?.expectedEnd).toBe(END);
+
+      await store.updateExpectedEnd(id, null);
+      expect((await store.getEndpoint(id))?.expectedEnd).toBeNull();
+    });
+
+    it("bumps the version so an open dashboard picks it up", async () => {
+      const { id, version } = await newEndpoint();
+      await store.updateExpectedEnd(id, END);
+
+      expect((await store.getEndpoint(id))?.version).toBe(version + 1);
+    });
+
+    it("returns null for an unknown endpoint", async () => {
+      expect(await store.updateExpectedEnd("nope", END)).toBeNull();
+    });
+
+    it("counts only the messages flagged as late", async () => {
+      const { id } = await newEndpoint();
+      await store.addMessage(id, message({ afterExpectedEnd: false }));
+      await store.addMessage(id, message({ afterExpectedEnd: true }));
+      await store.addMessage(id, message({ afterExpectedEnd: true }));
+
+      expect((await store.getSnapshot(id))?.endpoint.afterEndCount).toBe(2);
+    });
+
+    // Same bug as the valid/invalid counters: a tally derived from the retained
+    // list would start answering "nothing arrived late" once the evidence was
+    // trimmed away, which is the one answer this feature must never invent.
+    it("stays cumulative past the retention cap", async () => {
+      const { id } = await newEndpoint();
+      const total = MAX_STORED_MESSAGES + 9;
+      for (let i = 0; i < total; i++) {
+        await store.addMessage(id, message({ afterExpectedEnd: true }));
+      }
+
+      expect((await store.getSnapshot(id))?.endpoint.afterEndCount).toBe(total);
+    });
+
+    // Correcting the deadline does not un-receive what already arrived under
+    // the old one, so unlike the heartbeat period this clears no counts.
+    it("keeps the count when the deadline changes", async () => {
+      const { id } = await newEndpoint();
+      await store.updateExpectedEnd(id, END);
+      await store.addMessage(id, message({ afterExpectedEnd: true }));
+
+      await store.updateExpectedEnd(id, "2099-01-01T00:00:00.000Z");
+      expect((await store.getEndpoint(id))?.afterEndCount).toBe(1);
+
+      await store.updateExpectedEnd(id, null);
+      expect((await store.getEndpoint(id))?.afterEndCount).toBe(1);
     });
   });
 

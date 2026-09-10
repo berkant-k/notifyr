@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import { GET as getMessages } from "@/app/api/endpoints/[endpointId]/messages/route";
+import { PUT as putExpectedEnd } from "@/app/api/endpoints/[endpointId]/expected-end/route";
 import { PUT as putHeartbeatPeriod } from "@/app/api/endpoints/[endpointId]/heartbeat-period/route";
 import { PUT as putPayloadContent } from "@/app/api/endpoints/[endpointId]/payload-content/route";
 import { PUT as putRules } from "@/app/api/endpoints/[endpointId]/response-rules/route";
@@ -760,6 +761,150 @@ describe("heartbeat period and continuity", () => {
     const snapshot: EndpointSnapshot = await (await poll(id)).json();
     expect(snapshot.endpoint.continuity).toHaveLength(1);
     expect(snapshot.endpoint.continuity[0].lastEventCount).toBe(1);
+  });
+});
+
+describe("expected Subscription end", () => {
+  const PAST = "2020-01-01T00:00:00.000Z";
+  const FUTURE = "2099-01-01T00:00:00.000Z";
+
+  function setEnd(endpointId: string, body: unknown) {
+    return putExpectedEnd(
+      new Request(`${ORIGIN}/api/endpoints/${endpointId}/expected-end`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+      params(endpointId),
+    );
+  }
+
+  it("starts unset, and nothing is checked", async () => {
+    const id = await newEndpoint();
+    await send(id, HANDSHAKE);
+
+    const snapshot: EndpointSnapshot = await (await poll(id)).json();
+    expect(snapshot.endpoint.expectedEnd).toBeNull();
+    expect(snapshot.endpoint.afterEndCount).toBe(0);
+    expect(snapshot.messages[0].afterExpectedEnd).toBe(false);
+    expect(snapshot.messages[0].validationErrors).toEqual([]);
+  });
+
+  it("normalises the stored instant to UTC", async () => {
+    const id = await newEndpoint();
+    expect((await setEnd(id, { expectedEnd: "2099-01-01T01:00:00+01:00" })).status).toBe(200);
+
+    const snapshot: EndpointSnapshot = await (await poll(id)).json();
+    expect(snapshot.endpoint.expectedEnd).toBe(FUTURE);
+  });
+
+  // The whole point: a subscription whose end has passed should have stopped.
+  it("warns when a notification arrives after the end", async () => {
+    const id = await newEndpoint();
+    await setEnd(id, { expectedEnd: PAST });
+    await send(id, HANDSHAKE);
+
+    const snapshot: EndpointSnapshot = await (await poll(id)).json();
+    const [message] = snapshot.messages;
+
+    expect(message.afterExpectedEnd).toBe(true);
+    expect(snapshot.endpoint.afterEndCount).toBe(1);
+
+    const finding = message.validationErrors.find((issue) =>
+      issue.message.includes("Subscription.end"),
+    );
+    expect(finding?.severity).toBe("warning");
+    // A warning, so the notification is still valid and still tallied by type.
+    expect(message.isValid).toBe(true);
+    expect(snapshot.endpoint.validCount).toBe(1);
+    expect(snapshot.endpoint.notificationCounts.handshake).toBe(1);
+  });
+
+  it("says nothing while the end is still ahead", async () => {
+    const id = await newEndpoint();
+    await setEnd(id, { expectedEnd: FUTURE });
+    await send(id, HANDSHAKE);
+
+    const snapshot: EndpointSnapshot = await (await poll(id)).json();
+    expect(snapshot.messages[0].afterExpectedEnd).toBe(false);
+    expect(snapshot.endpoint.afterEndCount).toBe(0);
+    expect(snapshot.messages[0].validationErrors).toEqual([]);
+  });
+
+  // Measured from the clock, not the body: a server still POSTing rubbish past
+  // the end has still not stopped.
+  it("flags an unparseable body that arrives late", async () => {
+    const id = await newEndpoint();
+    await setEnd(id, { expectedEnd: PAST });
+    await send(id, "{ not json");
+
+    const snapshot: EndpointSnapshot = await (await poll(id)).json();
+    expect(snapshot.messages[0].isValid).toBe(false);
+    expect(snapshot.messages[0].afterExpectedEnd).toBe(true);
+    expect(snapshot.endpoint.afterEndCount).toBe(1);
+  });
+
+  it("stops checking once cleared", async () => {
+    const id = await newEndpoint();
+    await setEnd(id, { expectedEnd: PAST });
+    await send(id, HANDSHAKE);
+    expect((await setEnd(id, { expectedEnd: null })).status).toBe(200);
+    await send(id, HANDSHAKE);
+
+    const snapshot: EndpointSnapshot = await (await poll(id)).json();
+    expect(snapshot.endpoint.expectedEnd).toBeNull();
+    expect(snapshot.messages[0].afterExpectedEnd).toBe(false);
+    // The earlier arrival still happened; clearing the field does not un-receive it.
+    expect(snapshot.endpoint.afterEndCount).toBe(1);
+  });
+
+  it("treats an empty string as clearing the field", async () => {
+    const id = await newEndpoint();
+    await setEnd(id, { expectedEnd: PAST });
+    expect((await setEnd(id, { expectedEnd: "" })).status).toBe(200);
+
+    const snapshot: EndpointSnapshot = await (await poll(id)).json();
+    expect(snapshot.endpoint.expectedEnd).toBeNull();
+  });
+
+  it("does not re-grade messages already stored", async () => {
+    const id = await newEndpoint();
+    await send(id, HANDSHAKE);
+    await setEnd(id, { expectedEnd: PAST });
+
+    const snapshot: EndpointSnapshot = await (await poll(id)).json();
+    expect(snapshot.messages[0].afterExpectedEnd).toBe(false);
+    expect(snapshot.endpoint.afterEndCount).toBe(0);
+  });
+
+  it("rejects a value that is not a date-time", async () => {
+    const id = await newEndpoint();
+    const response = await setEnd(id, { expectedEnd: "next Tuesday" });
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toContain("date-time");
+  });
+
+  it("rejects a non-string, non-null value", async () => {
+    const id = await newEndpoint();
+    expect((await setEnd(id, { expectedEnd: 1_760_000_000 })).status).toBe(400);
+  });
+
+  it("rejects a body that is not a JSON object", async () => {
+    const id = await newEndpoint();
+    const response = await putExpectedEnd(
+      new Request(`${ORIGIN}/api/endpoints/${id}/expected-end`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: "[]",
+      }),
+      params(id),
+    );
+    expect(response.status).toBe(400);
+  });
+
+  it("404s for an unknown endpoint", async () => {
+    expect((await setEnd("no-such-endpoint", { expectedEnd: FUTURE })).status).toBe(404);
   });
 });
 

@@ -160,6 +160,19 @@ export const HEARTBEAT_PERIOD_RULES = `0 to switch the check off, or ${MIN_HEART
 export const DEFAULT_HEARTBEAT_PERIOD_SECONDS = 120;
 
 /**
+ * `Subscription.end`: the instant after which the server should have stopped
+ * sending. Like the heartbeat period and the payload level, it lives on the
+ * Subscription, which a receiver never sees, so Notifyr can only check it
+ * against an instant the user supplies. Null means unset and nothing is
+ * checked.
+ *
+ * Stored normalised to UTC so a value typed in one zone and read in another is
+ * still the same moment.
+ */
+export const EXPECTED_END_RULES =
+  "An ISO 8601 instant, e.g. 2026-09-10T18:30:00Z. Clear it to switch the check off.";
+
+/**
  * What one Subscription's stream looks like so far.
  *
  * Keyed by `SubscriptionStatus.subscription.reference` rather than per endpoint,
@@ -238,6 +251,15 @@ export interface Message {
    * messages are never re-validated. Null when nothing was expected.
    */
   expectedPayloadContent: PayloadContent | null;
+  /**
+   * True when this arrived after the endpoint's expected `Subscription.end`.
+   *
+   * Recorded per message rather than recomputed, for the same reason as
+   * `expectedPayloadContent`: the deadline can be changed afterwards and
+   * messages are never re-validated. It is also what the endpoint's
+   * `afterEndCount` increments from, so it must travel with the message.
+   */
+  afterExpectedEnd: boolean;
   /** Request headers, alphabetical, stored verbatim. */
   headers: MessageHeader[];
   /** Request body exactly as received. Never re-serialised — an invalid body must stay inspectable. */
@@ -281,6 +303,19 @@ export interface Endpoint {
   expectedPayloadContent: PayloadContent | null;
   /** Heartbeat period the user says the Subscription carries. 0 is off. */
   heartbeatPeriodSeconds: number;
+  /**
+   * The `Subscription.end` the user says was set, ISO 8601 in UTC. Null means
+   * unset, and arrival time is then not checked at all.
+   */
+  expectedEnd: string | null;
+  /**
+   * How many notifications have arrived after `expectedEnd`, cumulative.
+   *
+   * Cumulative rather than counted off the retained messages, like every other
+   * counter here: the store keeps 100 messages, and "did anything arrive after
+   * the end?" must not start answering no once the evidence is trimmed away.
+   */
+  afterEndCount: number;
   /**
    * One record per Subscription seen, most recently active first. Event gaps
    * are tracked whether or not a heartbeat period is set — the sender supplies

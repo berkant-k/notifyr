@@ -10,6 +10,7 @@ import MessageList from "@/components/MessageList";
 import NotificationCounters from "@/components/NotificationCounters";
 import PayloadExpectationCard from "@/components/PayloadExpectationCard";
 import ResponseRulesCard from "@/components/ResponseRulesCard";
+import SubscriptionEndCard from "@/components/SubscriptionEndCard";
 import { useEndpointPoll } from "@/hooks/useEndpointPoll";
 import {
   emptyNotificationCounts,
@@ -252,6 +253,21 @@ export default function DashboardView({
               endpointId={endpointId}
               key={`heartbeat-${snapshot.endpoint.heartbeatPeriodSeconds}`}
               seconds={snapshot.endpoint.heartbeatPeriodSeconds}
+              onChanged={refresh}
+            />
+          )}
+
+          {/*
+            Keyed on the stored deadline for the same reason as the heartbeat
+            card: the field holds local state while typing, so a change made in
+            another tab has to remount it to be picked up.
+          */}
+          {snapshot && (
+            <SubscriptionEndCard
+              endpointId={endpointId}
+              key={`expected-end-${snapshot.endpoint.expectedEnd ?? "unset"}`}
+              expectedEnd={snapshot.endpoint.expectedEnd}
+              afterEndCount={snapshot.endpoint.afterEndCount}
               onChanged={refresh}
             />
           )}

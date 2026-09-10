@@ -12,6 +12,7 @@ until you know the constraint.
 - [Subscription notifications](#subscription-notifications)
 - [Response overrides](#response-overrides)
 - [Expected payload content](#expected-payload-content)
+- [Expected Subscription end](#expected-subscription-end)
 - [Endpoint ids](#endpoint-ids)
 - [Request headers](#request-headers)
 - [Project layout](#project-layout)
@@ -266,6 +267,54 @@ The rules themselves are in `src/lib/payload.ts`, quoted from
 [payloads.html](https://hl7.org/fhir/uv/subscriptions-backport/payloads.html)
 and tabulated in [VALIDATION.md](VALIDATION.md#4-payload-content-conformance).
 
+## Expected Subscription end
+
+`Subscription.end` is the instant a subscription is meant to be finished with.
+Like the payload level and the heartbeat period it lives on the Subscription,
+which a receiver never sees, so the dashboard takes it as a setting and the
+endpoint remembers it. Empty switches the check off; there is no default,
+because there is no conventional value to assume and guessing one would report
+every notification on an unconfigured endpoint as late.
+
+Anything arriving afterwards gets a warning naming the deadline and how far past
+it the notification came, and the endpoint keeps a cumulative `afterEndCount`.
+
+Four decisions worth keeping:
+
+- **No tolerance, unlike the heartbeat check.** A heartbeat gets 1.5x its period
+  because scheduler jitter makes an exact comparison fire constantly on a
+  healthy server. The end is a single instant the server agreed to honour, and
+  the question is a yes/no one — "is anything still arriving?" — so a grace
+  window would answer a different question than the one being asked.
+- **Every message is checked, valid or not.** Continuity needs a notification
+  that validated, because a gap is measured from a counter inside the body. This
+  is measured from the clock, which is known whatever the body turned out to be,
+  and an unparseable POST an hour past the end is still a server that has not
+  stopped.
+- **A warning, never an error**, for the same reason as a payload mismatch: this
+  is the sender's timing against a value the user typed, and grading it invalid
+  would drop the notification out of the very tallies being watched.
+- **The count is cumulative and the deadline is not retroactive.** `afterEndCount`
+  increments on write like every other counter here, so "did anything arrive
+  late?" keeps answering yes after the messages that proved it have been trimmed
+  past the 100-message cap. Correspondingly, changing or clearing the deadline
+  clears nothing — those notifications did arrive under the deadline in force at
+  the time — and it does not re-grade stored messages, which are never
+  re-validated. `Message.afterExpectedEnd` records the verdict each one was
+  given, for the same reason `Message.expectedPayloadContent` does.
+
+The comparison lives in `src/lib/expiry.ts`, in one place: the boolean the store
+counts from and the warning the user reads cannot disagree about whether a given
+notification was late.
+
+One wrinkle is in the UI rather than the rules. The card uses a
+`datetime-local` input, which carries no timezone — the browser reads it as
+local wall time. That is right for "stop about ten minutes from now" and wrong
+for anyone holding an exact instant from their Subscription, so the value is
+resolved to an instant in the browser, stored normalised to UTC, and echoed back
+under the field where a mismatched offset is visible before it produces a run of
+confusing warnings.
+
 ## Endpoint ids
 
 An id may be chosen or left blank for a random UUID. Chosen ids are taken
@@ -346,6 +395,7 @@ src/
     ResponseRulesCard.tsx                Per-type response override switches
     PayloadExpectationCard.tsx           Expected payload level select
     HeartbeatPeriodCard.tsx              Expected heartbeat period input
+    SubscriptionEndCard.tsx              Expected Subscription.end input
     CodeBlock.tsx                        Dark code block with a copy button
     FhirCandleGuide.tsx                  End-to-end walkthrough, shown in-app
     ValidationExplainer.tsx              How the validation tiers work
@@ -359,6 +409,7 @@ src/
     responseRules.ts                     Response override validation
     payload.ts                           Payload content conformance rules
     continuity.ts                        Event gaps and heartbeat liveness
+    expiry.ts                            Arrivals after the expected Subscription.end
     headers.ts                           Header capture, credential flagging
     store.ts                             MessageStore interface + in-memory impl
     validation.ts                        Three-tier validation pipeline

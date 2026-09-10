@@ -162,6 +162,9 @@ export class RedisStore implements MessageStore {
     // fields, so trimming can never make them decrease.
     pipeline.ltrim(messagesKey(endpointId), 0, MAX_STORED_MESSAGES - 1);
     pipeline.hincrby(key, message.isValid ? "validCount" : "invalidCount", 1);
+    // Judged against the deadline in force when it arrived, and counted here so
+    // the tally outlives the LTRIM above.
+    if (message.afterExpectedEnd) pipeline.hincrby(key, "afterEndCount", 1);
     // Only valid notifications are tallied by type: an invalid Bundle has not
     // established what kind of notification it was.
     if (message.isValid && message.notificationType) {
@@ -269,6 +272,25 @@ export class RedisStore implements MessageStore {
     return this.getEndpoint(endpointId);
   }
 
+  async updateExpectedEnd(
+    endpointId: string,
+    expectedEnd: string | null,
+  ): Promise<Endpoint | null> {
+    const key = endpointKey(endpointId);
+    if ((await this.redis.exists(key)) === 0) return null;
+
+    // Absent means unset, so switching the check off is a delete rather than a
+    // sentinel — same as expectedPayloadContent.
+    if (expectedEnd === null) await this.redis.hdel(key, "expectedEnd");
+    else await this.redis.hset(key, { expectedEnd });
+
+    // afterEndCount is not touched: it is an HINCRBY field recording arrivals
+    // that already happened, not a judgement that a new deadline can revise.
+    await this.redis.pipeline().hincrby(key, "version", 1).expire(key, endpointTtlSeconds()).exec();
+
+    return this.getEndpoint(endpointId);
+  }
+
   async recordContinuity(
     endpointId: string,
     observation: Omit<ContinuityObservation, "heartbeatPeriodSeconds">,
@@ -311,6 +333,8 @@ function newEndpoint(id: string): Endpoint {
     responseRules: defaultResponseRules(),
     expectedPayloadContent: null,
     heartbeatPeriodSeconds: DEFAULT_HEARTBEAT_PERIOD_SECONDS,
+    expectedEnd: null,
+    afterEndCount: 0,
     continuity: [],
     version: 0,
     // Filled in by the caller once the TTL it wrote is known.
@@ -329,6 +353,7 @@ function toHash(endpoint: Endpoint): Record<string, string | number> {
     validCount: endpoint.validCount,
     invalidCount: endpoint.invalidCount,
     heartbeatPeriodSeconds: endpoint.heartbeatPeriodSeconds,
+    afterEndCount: endpoint.afterEndCount,
     continuity: JSON.stringify(endpoint.continuity),
     version: endpoint.version,
   };
@@ -340,6 +365,7 @@ function toHash(endpoint: Endpoint): Record<string, string | number> {
   if (endpoint.expectedPayloadContent !== null) {
     hash.expectedPayloadContent = endpoint.expectedPayloadContent;
   }
+  if (endpoint.expectedEnd !== null) hash.expectedEnd = endpoint.expectedEnd;
 
   return hash;
 }
@@ -377,6 +403,11 @@ function fromHash(hash: Record<string, unknown>, ttl: number): Endpoint {
       ? null
       : (String(expected) as PayloadContent),
     heartbeatPeriodSeconds: numberFrom(hash.heartbeatPeriodSeconds),
+    expectedEnd:
+      hash.expectedEnd === undefined || hash.expectedEnd === null
+        ? null
+        : String(hash.expectedEnd),
+    afterEndCount: numberFrom(hash.afterEndCount),
     continuity: readContinuity(hash),
     version: numberFrom(hash.version),
   };
