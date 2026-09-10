@@ -1,8 +1,9 @@
 <h1 align="center">Notifyr</h1>
 
 <p align="center">
-  A disposable webhook endpoint for testing FHIR <code>Subscription</code>
-  <code>rest-hook</code> notifications — captured, validated and shown live.
+  A disposable webhook endpoint for verifying FHIR <code>Subscription</code>
+  <code>rest-hook</code> notification workflows — every delivery checked from
+  the receiver's side, live.
 </p>
 
 <p align="center">
@@ -27,33 +28,46 @@
 ## Why
 
 Testing a `rest-hook` subscription normally means standing up a publicly
-reachable server just to find out what your FHIR server is actually sending.
-Notifyr replaces that with a URL you create in one click.
+reachable server just to find out whether your FHIR server's notifications
+actually work. Notifyr replaces that with a URL you create in one click.
 
-Point a `Subscription` at it, and every request that arrives is:
+**The subject is the notification workflow, not the payload.** Notifyr is not a
+general FHIR resource validator — it is the receiving half of a subscription,
+built to answer the questions only the receiver can answer: did the handshake
+arrive, are heartbeats on time, did an event go missing, does what turned up
+match the `Subscription` you configured, and how does your server behave when
+the endpoint answers with an error.
+
+Point a `Subscription` at it, and every transaction that arrives is:
 
 - **Captured in full** — the raw body exactly as sent, even when it is
   malformed, because an unparseable payload is the one you most need to see.
-- **Validated** — JSON, then FHIR structure and value sets, with every problem
-  located (`Patient.gender`), explained, and — for the rules Notifyr applies
-  itself — linked to the paragraph of the spec or Backport IG it came from, so a
-  disagreement about a payload is settled by reading rather than by trusting
-  this tool.
-- **Counted by type** — handshakes, heartbeats and event-notifications tallied
-  separately, so you can confirm each stage of the subscription lifecycle fired.
+- **Placed in the lifecycle** — handshakes, heartbeats and event-notifications
+  tallied separately, so you can confirm each stage fired and in what order,
+  rather than seeing one undifferentiated pile of POSTs.
 - **Checked for what never arrived** — an event counter that jumps from 7 to 11
   is three notifications you never received; a heartbeat that never comes is a
-  channel that has gone quiet. Both are reported and tallied, and nothing else
-  in the pipeline can see a message that was never sent.
-- **Shown live** — the dashboard updates in about a second, no refresh.
+  channel that has gone quiet. Both are reported and tallied, and no
+  message-at-a-time check can see either, because nothing arrives to inspect.
+- **Held to the `Subscription` you configured** — a receiver never sees the
+  Subscription resource, so tell Notifyr the payload level and heartbeat period
+  you set and each notification is judged against them instead of against
+  nothing.
 - **Answerable with an error** — switch handshake, heartbeat or
   event-notification off to reply 500 (or any status you pick) instead of 200,
-  and watch how your server retries or gives up.
+  and watch how your server retries or gives up. The half of the transaction the
+  receiver controls is testable too.
+- **Checked as FHIR, as the floor** — JSON, then structure and value sets, with
+  every problem located (`Patient.gender`) and explained. Notifyr's own rules
+  cite the paragraph of the spec or Backport IG they came from, so a
+  disagreement is settled by reading rather than by trusting this tool.
+- **Shown live** — the dashboard updates in about a second, no refresh.
 
-Handshake and heartbeat notifications are first-class: `SubscriptionStatus`
-arrived in FHIR **R4B**, and most JS validators only know R4, so they reject
-every handshake outright. Notifyr validates them properly. See
-[docs/DESIGN.md](docs/DESIGN.md#subscription-notifications).
+Handshake and heartbeat notifications are first-class, which is less common than
+it sounds: `SubscriptionStatus` arrived in FHIR **R4B**, and most JS validators
+only know R4, so they reject every handshake outright — the two notification
+types that carry the workflow are exactly the two a stock validator throws out.
+See [docs/DESIGN.md](docs/DESIGN.md#subscription-notifications).
 
 ## Quick start
 
@@ -175,9 +189,10 @@ Nothing is notified yet — the topic fires on completion, not creation.
 You end up with a handshake, an event-notification, and a heartbeat every two
 minutes for as long as the subscription stays active.
 
-## Validation
+## What gets checked
 
-Three tiers, each gating the next:
+**The HTTP status is decided by the floor** — whether the body is a FHIR
+resource at all. Three tiers, each gating the next:
 
 | Tier | Check | On failure |
 | --- | --- | --- |
@@ -185,8 +200,22 @@ Three tiers, each gating the next:
 | 2 | It is an object with a `resourceType` | `422` |
 | 3 | Passes [`fhir`](https://www.npmjs.com/package/fhir) R4 structural and value-set validation | `422` |
 
-Warnings — a `Content-Type` that is not `application/fhir+json`, a notification
-`Bundle` that is not `history` — are shown but never make a message invalid.
+Everything a receiver actually wants to know sits above that floor:
+
+| Check | Reads | On failure |
+| --- | --- | --- |
+| `SubscriptionStatus` | `type`, `subscription`, `topic`, `notificationEvent` — the R4B rules the stock validator cannot see | `422` when a required element is missing or the wrong type |
+| Notification envelope | `Bundle.type` is `history`, `SubscriptionStatus` is the first entry, `timestamp` present | Warning |
+| [Payload level](#checking-the-payload-level) | What arrived, against the `empty` / `id-only` / `full-resource` level you configured | Warning |
+| [Stream continuity](#stream-continuity) | Event-counter gaps and overdue heartbeats, across notifications | Warning |
+| Transport | `Content-Type` is `application/fhir+json` | Warning |
+
+A notification whose `SubscriptionStatus` is unreadable cannot be placed in the
+workflow at all, so that one rejects. The rest are warnings on purpose: they
+describe the stream, or your stated expectation, rather than a broken message —
+and a warned notification is still received, stored and counted, which is what a
+receiver needs. "This arrived, and here is what is odd about it" beats a bare
+422.
 
 Subscription notifications get dedicated handling, because the R4-only validator
 cannot see `SubscriptionStatus` at all. Full detail, including the exact error
