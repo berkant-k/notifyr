@@ -35,9 +35,16 @@ Point a `Subscription` at it, and every request that arrives is:
 - **Captured in full** — the raw body exactly as sent, even when it is
   malformed, because an unparseable payload is the one you most need to see.
 - **Validated** — JSON, then FHIR structure and value sets, with every problem
-  located (`Patient.gender`) and explained.
+  located (`Patient.gender`), explained, and — for the rules Notifyr applies
+  itself — linked to the paragraph of the spec or Backport IG it came from, so a
+  disagreement about a payload is settled by reading rather than by trusting
+  this tool.
 - **Counted by type** — handshakes, heartbeats and event-notifications tallied
   separately, so you can confirm each stage of the subscription lifecycle fired.
+- **Checked for what never arrived** — an event counter that jumps from 7 to 11
+  is three notifications you never received; a heartbeat that never comes is a
+  channel that has gone quiet. Both are reported and tallied, and nothing else
+  in the pipeline can see a message that was never sent.
 - **Shown live** — the dashboard updates in about a second, no refresh.
 - **Answerable with an error** — switch handshake, heartbeat or
   event-notification off to reply 500 (or any status you pick) instead of 200,
@@ -212,7 +219,9 @@ has a switch per notification type — handshake, heartbeat and event-notificati
 — and switching one off makes Notifyr answer an error status instead:
 
 ```bash
-curl -X PUT http://localhost:3000/api/endpoints/$ID/response-rules   -H 'content-type: application/json'   -d '{"handshake":{"enabled":false,"status":500}}'
+curl -X PUT http://localhost:3000/api/endpoints/$ID/response-rules \
+  -H 'content-type: application/json' \
+  -d '{"handshake":{"enabled":false,"status":500}}'
 ```
 
 The suggested status is `400`, and any whole number from `201` to `599` works
@@ -249,6 +258,43 @@ disagree, which is as often a mistyped expectation as a server bug, so they
 never change whether a notification counts as valid. Each stored notification
 records the level it was judged against, since changing the select does not
 re-grade what has already arrived.
+
+## Stream continuity
+
+Everything above judges the bytes of a request that arrived. Two failures show
+up only in what *didn't*, so Notifyr tracks them across notifications:
+
+- **Missed events.** Every notification carries
+  `eventsSinceSubscriptionStart` — heartbeats included, which is what makes a
+  quiet stream measurable. A counter that jumps from 7 to 11 means three
+  notifications never reached you: the arriving message is warned and the three
+  are added to a cumulative tally. A counter that goes *backwards* is a
+  recreated Subscription rather than a loss, so it is recorded as a restart and
+  the sequence simply resumes from there.
+- **Late heartbeats.** Tell Notifyr the period you configured — the
+  **Heartbeat period** card, or the API below; it defaults to 120 seconds, and
+  `0` switches the check off:
+
+  ```bash
+  curl -X PUT http://localhost:3000/api/endpoints/$ID/heartbeat-period \
+    -H 'content-type: application/json' \
+    -d '{"heartbeatPeriodSeconds":120}'
+  ```
+
+  A heartbeat arriving past 1.5× that period (or the period plus 5 seconds,
+  whichever is later — schedulers jitter, and a check that fires at 121s gets
+  switched off within the minute) is warned and counted. A subscription that has
+  gone silent is shown as overdue on the dashboard without waiting for anything
+  to arrive.
+
+Both are tracked per `SubscriptionStatus.subscription.reference`, not per
+endpoint, because one endpoint may serve several Subscriptions and each counts
+its own events — interleaving two of them would otherwise read as a permanent
+gap on a system where nothing is wrong.
+
+Like the payload-level checks these are **warnings**: they describe the stream,
+not the message in hand, and never make a notification invalid. The rules and
+the reasoning are in [docs/CONTINUITY.md](docs/CONTINUITY.md).
 
 ## Security and limitations
 
@@ -315,6 +361,7 @@ mechanism on the Subscription resource page instead.
 | [SubscriptionTopic (R4B)](https://hl7.org/fhir/R4B/subscriptiontopic.html) | Which events trigger a notification and what the payload contains |
 | [Topic-Based Subscriptions Framework (R5)](https://hl7.org/fhir/R5/subscriptions.html) | The full framework; R5 types `eventsSinceSubscriptionStart` as `integer64` |
 | [Subscriptions R5 Backport IG](https://hl7.org/fhir/uv/subscriptions-backport/) | How R4 servers implement the R5 model; source of the `backport-*` extensions |
+| [Errors and recovery (Backport IG)](https://hl7.org/fhir/uv/subscriptions-backport/errors.html) | Spotting lost notifications from event counters, and silence from heartbeats |
 | [fhir-candle](https://github.com/FHIR/fhir-candle) | The reference server used in the walkthrough |
 | [fhir (npm)](https://www.npmjs.com/package/fhir) | The R4 validator Notifyr runs payloads through |
 
