@@ -386,19 +386,28 @@ No file in `fhir`'s shipped JavaScript references lodash at all, so no code path
 loads it. Expect the advisory to persist until `fhir` ships a release without
 the bundled copy.
 
-### TypeScript major bumps are ignored
+### TypeScript and ESLint major bumps are ignored
 
-`.github/dependabot.yml` ignores TypeScript majors. TypeScript 7 (the native
-port) breaks `npm run lint` because the `typescript-eslint` bundled inside
-`eslint-config-next` refuses to load against it. `tsc --noEmit`, vitest and
+`.github/dependabot.yml` ignores majors for both `typescript` and `eslint`.
+Minor and patch updates still flow normally; only the major is held back.
+
+TypeScript 7 (the native port) breaks `npm run lint` because the
+`typescript-eslint` bundled inside `eslint-config-next` refuses to load against
+it — `typescript-eslint does not support TS 7.0`. `tsc --noEmit`, vitest and
 `next build` all pass on TS 7; only linting is blocked, and the blocker is
 upstream ([typescript-eslint#10940](https://github.com/typescript-eslint/typescript-eslint/issues/10940)).
-Remove the ignore entry once that support lands.
 
-ESLint 10 currently fails for the same class of reason — `eslint-plugin-react`,
-also bundled by `eslint-config-next`, calls `context.getFilename()`, removed in
-ESLint 10. Both are the same underlying problem: **`eslint-config-next` bundles
-plugins that lag the tooling.**
+ESLint 10 fails for the same class of reason — `eslint-plugin-react`, also
+bundled by `eslint-config-next`, still calls `context.getFilename()`, removed in
+ESLint 10, so the run dies loading `react/display-name`. The plugin's own peer
+range stops at `^9.7`, so no version inside the `^7.37.0` that
+`eslint-config-next` asks for can satisfy ESLint 10.
+
+Both are the same underlying problem: **`eslint-config-next` bundles plugins
+that lag the tooling.** Neither has a workaround in this repo — the offending
+plugins are transitive dependencies of a config we do not control, and pinning
+around them would mean dropping lint coverage. Drop the matching ignore entry
+once upstream support lands.
 
 ## Where help is most useful
 
