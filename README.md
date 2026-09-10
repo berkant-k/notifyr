@@ -17,6 +17,10 @@
   <img src="docs/ss/notification-receiver.png" width="880"
        alt="Notifyr endpoint dashboard: the webhook URL with a copy button, Valid and Invalid counters reading 9 and 3, per-type tallies showing 1 handshake, 6 heartbeats and 2 event-notifications, and a list of the most recent notifications with timestamp, validity badge, HTTP status and summary.">
 </p>
+<p allign="center">
+  <img src="docs/ss/message-detail.png" width="880"
+       alt="Notifyr message detail: the message raw body and related validations">
+</p>
 
 <p align="center">
   <em>A live dashboard during the fhir-candle walkthrough — one handshake, six<br>
