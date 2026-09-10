@@ -1,13 +1,13 @@
 # Before publishing publicly
 
-**Status: nothing here is done, and the first item is a decision rather than a
-task.** Notifyr is correct and pleasant to run locally; this is the list that
-separates that from an instance strangers can point servers at.
+**Status: item 1 is decided, nothing is built yet.** Notifyr is correct and
+pleasant to run locally; this is the list that separates that from an instance
+strangers can point servers at.
 
 Each item says what breaks without it, so the list can be argued with rather
 than followed.
 
-## The decision that shapes the rest
+## The decision that shapes the rest — settled
 
 In-memory storage does not work on serverless. Each Vercel instance has its own
 module scope, so a notification handled by one is invisible to a dashboard poll
@@ -20,32 +20,45 @@ Two honest routes:
 
 | | **A. Shared store** | **B. One always-on instance** |
 | --- | --- | --- |
-| What it means | Redis, Vercel KV or Postgres behind `MessageStore` | Deploy to Fly, Render or a VPS running a single process |
+| What it means | Redis or Postgres behind `MessageStore` | A single process on a host that never sleeps |
 | Code | A new `MessageStore` implementation. Every method is already async for exactly this reason; callers do not change | **None** |
 | Effort | A day or so, plus a dependency and its credentials | An afternoon of deployment |
-| Also unlocks | SSE — the pub/sub needed for cross-instance visibility is the same thing SSE needs, so the polling loop could be replaced in the same change | Nothing further |
+| Also unlocks | Rate limiting and endpoint expiry — items 2 and 3 — on the same dependency | Nothing further |
 | Scales to | Many instances | One process; restarting it drops every endpoint |
 
-**B is the cheaper honest answer** for a small public instance, and it keeps the
-in-memory store's semantics exactly as they are documented. A goes further and
-is the right long-term shape, but it is not a prerequisite for being *public* —
-only for being *distributed*.
+**Decided: A, on Upstash Redis behind Vercel.** The full argument, the key
+layout and a sketch of `RedisStore` are in
+[REDIS-STORE.md](REDIS-STORE.md).
+
+The earlier draft of this page picked B, on the assumption that a free
+always-on host existed. Rechecked in September 2026, it mostly does not: Fly.io
+withdrew its free allowances in 2024, and Render's free tier sleeps after 15
+minutes without traffic, which would evaporate endpoints mid-session. Koyeb
+(1-hour idle) and an Oracle Always Free VM survive as honest B options, but B
+still leaves items 2 and 3 to write, while A brings both with it — a TTL *is*
+endpoint expiry, and the same connection does rate limiting.
 
 ## Blocking
 
-- [ ] **1. Decide storage or host (above).** Without it a public instance is
-      wrong in a way users will read as data loss.
+- [x] **1. Decide storage or host (above).** Decided: a shared store on Upstash
+      Redis, designed in [REDIS-STORE.md](REDIS-STORE.md). Building it is the
+      remaining work, and it is what items 2 and 3 now hang off.
 - [ ] **2. Rate limiting.** There is none. The endpoint accepts 1 MB bodies,
       keeps 100 per endpoint across up to 500 endpoints, and creating endpoints
       is unauthenticated — so one loop turns the service into a memory
       exhaustion or a bill. This is the item I would least want to skip, and it
       is also the cheapest of the three: a per-IP and per-endpoint limit on
-      `POST /hook/:id` and `POST /api/endpoints`.
+      `POST /hook/:id` and `POST /api/endpoints`. With the Redis store in
+      place this is `INCR` plus `EXPIRE` on the connection that already
+      exists — and it becomes *load-bearing*, because the 500-endpoint cap it
+      used to share the job with goes away with the in-memory store.
 - [ ] **3. Endpoint expiry.** Abandoned endpoints hold their slot in the
       500-endpoint cap forever, and their stored traffic sits there
       indefinitely. That traffic includes `x-forwarded-for`, which is personal
       data, so this is a retention question as much as a capacity one. A TTL —
-      say, an hour with no traffic — answers both.
+      say, an hour with no traffic — answers both, and under the Redis design it
+      is not separate work: it is an `EXPIRE` in the pipeline every write
+      already sends.
 
 ## Strongly recommended
 
