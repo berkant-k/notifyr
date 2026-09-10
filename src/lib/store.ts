@@ -8,10 +8,18 @@
  * each serverless instance gets its own module scope, so a notification handled
  * by one instance is invisible to a dashboard poll served by another, and all
  * data is lost on cold start. See README "Known limitations".
+ *
+ * A deployment that sets UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN
+ * gets `RedisStore` instead. Those variables are the switch: there is no
+ * separate flag that could drift out of step with whether the credentials to
+ * reach a shared store actually exist.
  */
+
+import { Redis } from "@upstash/redis";
 
 import { observe, type ContinuityObservation } from "@/lib/continuity";
 import { randomEndpointId } from "@/lib/endpointId";
+import { RedisStore } from "@/lib/redisStore";
 import {
   DEFAULT_HEARTBEAT_PERIOD_SECONDS,
   defaultResponseRules,
@@ -88,7 +96,7 @@ const MAX_TRACKED_SUBSCRIPTIONS = 20;
 /** Cap on live endpoints; the oldest is evicted past this. Bounds memory on a public deployment. */
 const MAX_ENDPOINTS = 500;
 
-class InMemoryStore implements MessageStore {
+export class InMemoryStore implements MessageStore {
   /** Insertion-ordered, so the first key is the oldest endpoint. */
   private endpoints = new Map<string, Endpoint>();
   /** endpointId -> messages, newest first. */
@@ -253,5 +261,19 @@ const globalForStore = globalThis as typeof globalThis & {
   __notifyrStore?: MessageStore;
 };
 
-export const store: MessageStore =
-  globalForStore.__notifyrStore ?? (globalForStore.__notifyrStore = new InMemoryStore());
+/**
+ * Credentials, not configuration: a deployment either has somewhere shared to
+ * put its data or it does not, and asking a second question about it only
+ * creates a way for the two answers to disagree.
+ */
+export function createStore(): MessageStore {
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (url && token) return new RedisStore(new Redis({ url, token }));
+
+  // Only the in-memory store needs the HMR parking above; RedisStore keeps its
+  // state out of the process entirely, which is the whole point of it.
+  return (globalForStore.__notifyrStore ??= new InMemoryStore());
+}
+
+export const store: MessageStore = createStore();

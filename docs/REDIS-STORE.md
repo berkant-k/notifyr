@@ -1,14 +1,14 @@
 # The Redis-backed store
 
-**Status: designed, not built.** This resolves item 1 of
-[PUBLISHING.md](PUBLISHING.md) — the decision that gates a public instance — in
-favour of **route A, a shared store**, on Upstash Redis behind a Vercel
-deployment.
+**Status: built.** `src/lib/redisStore.ts`, selected by `createStore()` in
+`src/lib/store.ts`. This resolves item 1 of [PUBLISHING.md](PUBLISHING.md) —
+the decision that gates a public instance — in favour of **route A, a shared
+store**, on Upstash Redis behind a Vercel deployment.
 
-`MessageStore` was built for exactly this: every method is already async, so
-nothing outside `lib/store.ts` changes. What follows is the mapping, the
-arithmetic that says it fits in a free tier, and a sketch close enough to type
-from.
+`MessageStore` was built for exactly this: every method was already async, and
+nothing outside `lib/store.ts` changed. What follows is why, the arithmetic
+that says it fits in a free tier, and the decisions the code cannot state for
+itself.
 
 ## Why not route B after all
 
@@ -107,203 +107,73 @@ items 1 and 2 want doing in the same sitting.
 | poll with `?since=` | `HGET version` | 1 |
 | `updateResponseRules` | `HSET` (one field per patched type) + `HINCRBY version` | 1 |
 | `updateExpectedPayloadContent` | `HSET` or `HDEL`, + `HINCRBY version` | 1 |
-| `updateHeartbeatPeriod` | read + write of the continuity field, + `HINCRBY version` | 2 |
-| `recordContinuity` | `HGET continuity`, compute, `HSET` | 2 |
+| `updateHeartbeatPeriod` | `HGETALL`, then `HSET` + `HINCRBY version` + `EXPIRE` | 2 |
+| `recordContinuity` | `HGETALL`, compute, `HSET` | 2 |
+
+The two continuity paths read with `HGETALL` rather than `HMGET`: Upstash
+returns an object keyed by field either way, and `HGETALL` answers "does this
+endpoint exist" in the same command, where `HMGET` on a missing key is
+indistinguishable from one whose fields are unset.
 
 Response rules are stored **one field per notification type** precisely so that
 `updateResponseRules` is a partial `HSET` rather than a read-merge-write. Two
 tabs toggling different switches cannot clobber each other.
 
-## Sketch
+## The implementation
+
+The code is `src/lib/redisStore.ts`; what follows is what reading it will not
+tell you.
+
+**It depends on a hand-written `RedisLike` interface, not on the Upstash
+client.** Ten commands, listed in one place. That is partly documentation — the
+whole surface this store needs, in fifteen lines — and partly what makes the
+test suite possible: `tests/support/fakeRedis.ts` implements the same
+interface in process, so `RedisStore` runs the *same* contract as
+`InMemoryStore` in `tests/store.test.ts`, with no network and no container.
+Every case runs twice.
+
+That fake covers this store's own logic — ordering, trimming, counter
+arithmetic, the 409, continuity folding. It cannot cover Upstash's wire
+behaviour, which is what `npm run test:live` is for: four cases in the same
+file, skipped unless `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`
+are present, so `npm test` and CI stay network-free. Copy `.env.example` to
+`.env.local` to run them.
+
+**Values come back parsed.** The Upstash client JSON-decodes responses, so a
+field written as `JSON.stringify(record)` returns as an object, and a field
+written as `0` returns as a number rather than `"0"`. Every read goes through
+`parseJson` or `numberFrom`, which accept both — the fake reproduces the
+decoding for the same reason.
+
+**The endpoint hash is the existence check.** `hash.id === undefined` is how
+"no such endpoint" is spelled, because a hash that has expired, was never
+created, or was trimmed to nothing are the same answer to the caller: `null`.
+
+**Response rules are one field per notification type** (`rule:handshake` and
+so on), so `updateResponseRules` is a partial `HSET` rather than a
+read-merge-write. Two dashboards toggling different switches cannot clobber each
+other — an improvement on the in-memory store, which merges a whole object.
+
+**The TTL is refreshed on writes and on snapshot reads**, so an endpoint someone
+is actively watching does not expire under them. The `?since=` fast path does
+not refresh; see "Still open".
+
+Selecting the implementation is credentials, not configuration:
 
 ```ts
-import { Redis } from "@upstash/redis";
-
-import { observe, type ContinuityObservation } from "@/lib/continuity";
-import { randomEndpointId } from "@/lib/endpointId";
-import type { MessageStore } from "@/lib/store";
-import {
-  DEFAULT_HEARTBEAT_PERIOD_SECONDS,
-  defaultResponseRules,
-  emptyNotificationCounts,
-  MAX_RECENT_MESSAGES,
-  MAX_STORED_MESSAGES,
-  type Endpoint,
-  type EndpointSnapshot,
-  type Message,
-  type NewMessage,
-  type ResponseRules,
-  type SubscriptionContinuity,
-  type ValidationError,
-} from "@/lib/types";
-
-/** An hour with no traffic. Answers PUBLISHING.md item 3, and replaces MAX_ENDPOINTS. */
-const TTL_SECONDS = 3600;
-
-const MAX_TRACKED_SUBSCRIPTIONS = 20;
-
-const endpointKey = (id: string) => `endpoint:${id}`;
-const messagesKey = (id: string) => `endpoint:${id}:messages`;
-
-export class RedisStore implements MessageStore {
-  constructor(private readonly redis: Redis = Redis.fromEnv()) {}
-
-  async createEndpoint(id?: string): Promise<Endpoint | null> {
-    const endpoint = newEndpoint(id ?? randomEndpointId());
-    const key = endpointKey(endpoint.id);
-
-    // The 409, atomically: of two racing creates only one sets the field. The
-    // in-memory store's has() check cannot promise this, and never had to.
-    if ((await this.redis.hsetnx(key, "id", endpoint.id)) === 0) return null;
-
-    await this.redis.pipeline().hset(key, toHash(endpoint)).expire(key, TTL_SECONDS).exec();
-
-    return endpoint;
-  }
-
-  async getEndpoint(endpointId: string): Promise<Endpoint | null> {
-    const hash = await this.redis.hgetall<Record<string, string>>(endpointKey(endpointId));
-    return hash ? fromHash(hash) : null;
-  }
-
-  async addMessage(endpointId: string, input: NewMessage): Promise<Message | null> {
-    const key = endpointKey(endpointId);
-    // A pipeline cannot branch, and "unknown endpoint" is a null, not a throw.
-    if ((await this.redis.exists(key)) === 0) return null;
-
-    const message: Message = { ...input, id: crypto.randomUUID(), endpointId };
-    const pipeline = this.redis.pipeline();
-
-    pipeline.lpush(messagesKey(endpointId), JSON.stringify(message));
-    // The retention cap is the write itself. The counters below are HINCRBY on
-    // separate fields, so trimming can never walk them backwards.
-    pipeline.ltrim(messagesKey(endpointId), 0, MAX_STORED_MESSAGES - 1);
-    pipeline.hincrby(key, message.isValid ? "validCount" : "invalidCount", 1);
-    // Only valid notifications are tallied by type.
-    if (message.isValid && message.notificationType) {
-      pipeline.hincrby(key, `count:${message.notificationType}`, 1);
-    }
-    pipeline.hincrby(key, "version", 1);
-    pipeline.expire(key, TTL_SECONDS);
-    pipeline.expire(messagesKey(endpointId), TTL_SECONDS);
-
-    await pipeline.exec();
-    return message;
-  }
-
-  async getSnapshot(
-    endpointId: string,
-    limit: number = MAX_RECENT_MESSAGES,
-  ): Promise<EndpointSnapshot | null> {
-    // One round trip, and the TTL refresh rides along free. Traffic is not the
-    // only sign an endpoint is alive; somebody watching it counts too.
-    const [hash, raw] = (await this.redis
-      .pipeline()
-      .hgetall<Record<string, string>>(endpointKey(endpointId))
-      .lrange(messagesKey(endpointId), 0, limit - 1)
-      .expire(endpointKey(endpointId), TTL_SECONDS)
-      .expire(messagesKey(endpointId), TTL_SECONDS)
-      .exec()) as [Record<string, string> | null, string[], number, number];
-
-    if (!hash) return null;
-
-    // No structuredClone anywhere here: deserialising is already a copy, so
-    // "snapshots must not alias live state" holds by construction.
-    return { endpoint: fromHash(hash), messages: raw.map((json) => JSON.parse(json) as Message) };
-  }
-
-  async updateResponseRules(
-    endpointId: string,
-    patch: Partial<ResponseRules>,
-  ): Promise<Endpoint | null> {
-    const key = endpointKey(endpointId);
-    if ((await this.redis.exists(key)) === 0) return null;
-
-    // One field per notification type, so a partial patch is a partial HSET.
-    // Two dashboards toggling different switches cannot overwrite each other.
-    const fields = Object.fromEntries(
-      Object.entries(patch).map(([type, rule]) => [`rule:${type}`, JSON.stringify(rule)]),
-    );
-
-    await this.redis.pipeline().hset(key, fields).hincrby(key, "version", 1).exec();
-    return this.getEndpoint(endpointId);
-  }
-
-  async recordContinuity(
-    endpointId: string,
-    observation: Omit<ContinuityObservation, "heartbeatPeriodSeconds">,
-  ): Promise<ValidationError[]> {
-    const key = endpointKey(endpointId);
-    const [json, period] = await this.redis.hmget<[string | null, string | null]>(
-      key,
-      "continuity",
-      "heartbeatPeriodSeconds",
-    );
-    if (period === null) return [];
-
-    const records: SubscriptionContinuity[] = json ? JSON.parse(json) : [];
-    const index = records.findIndex((record) => record.reference === observation.reference);
-
-    const { record, findings } = observe(index === -1 ? null : records[index], {
-      ...observation,
-      heartbeatPeriodSeconds: Number(period),
-    });
-
-    // Most recently active first, so the cap evicts whichever has been silent
-    // longest — the same ordering the in-memory store keeps.
-    if (index !== -1) records.splice(index, 1);
-    records.unshift(record);
-    records.length = Math.min(records.length, MAX_TRACKED_SUBSCRIPTIONS);
-
-    // Read-modify-write, and the one place this store is weaker than the
-    // in-memory one. See "The one race": the worst case is a lost increment on
-    // a warning counter, never a corrupt record and never a wrong wire status.
-    await this.redis.hset(key, { continuity: JSON.stringify(records) });
-    return findings;
-  }
-
-  // updateExpectedPayloadContent and updateHeartbeatPeriod follow the same
-  // shape: HSET the field, HINCRBY the version, and — for the period — clear
-  // missedHeartbeats inside the continuity JSON, since those counts were
-  // accumulated against the old period and mean nothing under a new one.
+export function createStore(): MessageStore {
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (url && token) return new RedisStore(new Redis({ url, token }));
+  return (globalForStore.__notifyrStore ??= new InMemoryStore());
 }
-
-function newEndpoint(id: string): Endpoint {
-  return {
-    id,
-    createdAt: new Date().toISOString(),
-    validCount: 0,
-    invalidCount: 0,
-    notificationCounts: emptyNotificationCounts(),
-    responseRules: defaultResponseRules(),
-    expectedPayloadContent: null,
-    heartbeatPeriodSeconds: DEFAULT_HEARTBEAT_PERIOD_SECONDS,
-    continuity: [],
-    version: 0,
-  };
-}
-
-/** Flatten for storage: counters as their own fields, so HINCRBY can reach them. */
-function toHash(endpoint: Endpoint): Record<string, string | number> { /* … */ }
-
-/** And back. The inverse of toHash, and the only place field names are known. */
-function fromHash(hash: Record<string, string>): Endpoint { /* … */ }
 ```
 
-Selecting it stays a one-liner at the bottom of `store.ts`, and the `globalThis`
-parking stays on the in-memory path where it belongs:
-
-```ts
-export const store: MessageStore = process.env.UPSTASH_REDIS_REST_URL
-  ? new RedisStore()
-  : (globalForStore.__notifyrStore ??= new InMemoryStore());
-```
-
-`Redis.fromEnv()` reads `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`,
-which is also how a deployment declares "I have a shared store" — no separate
-flag to drift out of step with reality. Local development keeps the in-memory
-store and needs no credentials, so `npm run dev` and the test suite are
-unaffected.
+A deployment either has somewhere shared to put its data or it does not; a
+separate flag would only add a way for the two answers to disagree. Half
+configured falls back to in-memory rather than constructing a client that fails
+on every request — wrong in a way the dashboard already warns about, instead of
+wrong on every notification. All three cases are tested.
 
 ## The one race
 
@@ -327,17 +197,22 @@ and neither earns its complexity until someone sees it happen.
 
 ## Staging
 
-1. **`RedisStore` plus the config seam.** `tests/store.test.ts` asserts only
-   interface behaviour, but it imports the `store` singleton, so pointing it at
-   Redis means parameterising the suite over implementations — export a factory,
-   run the same cases twice. That second run has to stay **opt-in**: the project
-   guarantees tests need no network, and CI has no Redis.
-2. **TTL, and the removal of `MAX_ENDPOINTS`** — one change, since the cap and
-   the TTL are two answers to the same question.
-3. **Rate limiting** (item 2) on the same connection.
-4. Deploy, then items 4 and 5.
+1. ~~**`RedisStore` plus the config seam**, with `tests/store.test.ts`
+   parameterised so both implementations answer the same contract.~~ Done.
+2. ~~**TTL, and no `MAX_ENDPOINTS`** — one change, since the cap and the TTL
+   are two answers to the same question.~~ Done: `TTL_SECONDS`, refreshed on
+   every write, and `RedisStore` has no endpoint cap.
+3. **Rate limiting** (item 2) on the same connection. Now load-bearing rather
+   than merely wanted, since the endpoint cap that shared the job is gone.
+4. ~~**A live smoke test** against a real Upstash database.~~ Done:
+   `npm run test:live`, plus an end-to-end pass through the running app —
+   handshake and two heartbeats posted to `/hook/:id`, read back through
+   `/api/endpoints/:id/messages` with the counters, the per-type tallies, the
+   continuity warnings and the `?since=` fast path all correct against a real
+   database.
+5. Deploy, then items 4 and 5 of PUBLISHING.md.
 
-Steps 1 and 2 are the day; step 3 is an hour once the connection exists.
+Steps 1 and 2 are done; step 3 is an hour once the connection exists.
 
 ## Still open
 

@@ -1,6 +1,6 @@
 # Before publishing publicly
 
-**Status: item 1 is decided, nothing is built yet.** Notifyr is correct and
+**Status: item 1 is built; 2 is the next blocker.** Notifyr is correct and
 pleasant to run locally; this is the list that separates that from an instance
 strangers can point servers at.
 
@@ -40,9 +40,11 @@ endpoint expiry, and the same connection does rate limiting.
 
 ## Blocking
 
-- [x] **1. Decide storage or host (above).** Decided: a shared store on Upstash
-      Redis, designed in [REDIS-STORE.md](REDIS-STORE.md). Building it is the
-      remaining work, and it is what items 2 and 3 now hang off.
+- [x] **1. Decide storage or host (above).** Decided and built: a shared store
+      on Upstash Redis — `src/lib/redisStore.ts`, selected by `createStore()`
+      when `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` are set.
+      Verified against a real Upstash database, end to end through the app.
+      Design and caveats: [REDIS-STORE.md](REDIS-STORE.md).
 - [ ] **2. Rate limiting.** There is none. The endpoint accepts 1 MB bodies,
       keeps 100 per endpoint across up to 500 endpoints, and creating endpoints
       is unauthenticated — so one loop turns the service into a memory
@@ -52,13 +54,13 @@ endpoint expiry, and the same connection does rate limiting.
       place this is `INCR` plus `EXPIRE` on the connection that already
       exists — and it becomes *load-bearing*, because the 500-endpoint cap it
       used to share the job with goes away with the in-memory store.
-- [ ] **3. Endpoint expiry.** Abandoned endpoints hold their slot in the
-      500-endpoint cap forever, and their stored traffic sits there
-      indefinitely. That traffic includes `x-forwarded-for`, which is personal
-      data, so this is a retention question as much as a capacity one. A TTL —
-      say, an hour with no traffic — answers both, and under the Redis design it
-      is not separate work: it is an `EXPIRE` in the pipeline every write
-      already sends.
+- [x] **3. Endpoint expiry.** Done for a Redis deployment: every key carries a
+      one-hour TTL, refreshed on writes and on snapshot reads, so an endpoint
+      expires an hour after both its traffic and its audience stop. This was
+      always a retention question as much as a capacity one — stored headers
+      include `x-forwarded-for`, which is personal data — and it is why the
+      Redis store has no equivalent of the in-memory `MAX_ENDPOINTS` cap. The
+      in-memory store keeps that cap, since nothing there ever forgets.
 
 ## Strongly recommended
 
