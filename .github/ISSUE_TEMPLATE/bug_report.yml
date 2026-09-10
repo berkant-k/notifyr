@@ -1,0 +1,62 @@
+name: Bug report
+description: Something behaves differently from what you expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. If this is a **security** issue, please do not
+        file it here — see [SECURITY.md](../blob/main/SECURITY.md).
+
+        Note that no authentication, guessable endpoint ids, and headers shown
+        in full are documented, intentional trade-offs rather than bugs.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you see, and what did you expect instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: payload
+    attributes:
+      label: The notification body
+      description: >
+        The single most useful thing you can include. Most validator bugs are
+        really disagreements about what a payload should look like.
+        **Please redact anything real first.**
+      render: json
+
+  - type: input
+    id: server
+    attributes:
+      label: FHIR server and version
+      placeholder: "fhir-candle 1.x, R4B"
+
+  - type: dropdown
+    id: notification-type
+    attributes:
+      label: Notification type
+      description: If this involves a Subscription notification.
+      options:
+        - Not applicable
+        - handshake
+        - heartbeat
+        - event-notification
+        - query-status
+        - query-event
+
+  - type: input
+    id: environment
+    attributes:
+      label: How are you running Notifyr?
+      placeholder: "npm run dev, Node 22.x, macOS"
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: Validation errors shown in the UI, console output, or CI logs.
+      render: shell

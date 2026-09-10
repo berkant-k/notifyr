@@ -1,0 +1,28 @@
+name: Feature request
+description: Suggest an improvement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, see
+        [where help is most useful](../blob/main/docs/DESIGN.md#where-help-is-most-useful)
+        — the known gaps are already listed there.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the situation you ran into, not just the feature you want.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to happen?
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
