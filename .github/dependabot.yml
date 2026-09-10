@@ -1,0 +1,71 @@
+# Dependabot is a built-in GitHub feature, not a workflow: this file is what
+# enables it. Version updates start once this lands on the default branch.
+# Security updates are separate and are switched on in
+# Settings -> Code security -> Dependabot security updates.
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    commit-message:
+      prefix: chore
+      include: scope
+
+    # Grouping keeps related packages moving together. A package matched by an
+    # earlier group is not considered by later ones, so the specific groups
+    # come first. Major bumps stay ungrouped and get their own PR to review.
+    groups:
+      # react and react-dom must always be on the same version; a PR that moved
+      # one without the other would leave the tree in a broken state.
+      react:
+        patterns:
+          - react
+          - react-dom
+          - "@types/react"
+          - "@types/react-dom"
+
+      # eslint-config-next is versioned in lockstep with next itself.
+      next:
+        patterns:
+          - next
+          - eslint-config-next
+          - "@next/*"
+
+      tailwind:
+        patterns:
+          - tailwindcss
+          - "@tailwindcss/*"
+
+      dev-minor-and-patch:
+        dependency-type: development
+        update-types:
+          - minor
+          - patch
+
+      prod-minor-and-patch:
+        dependency-type: production
+        update-types:
+          - minor
+          - patch
+
+  # Keeps the actions in ci.yml (checkout, setup-node) from going stale.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    labels:
+      - dependencies
+      - github-actions
+    commit-message:
+      prefix: chore
+    groups:
+      github-actions:
+        patterns:
+          - "*"
