@@ -2,7 +2,7 @@
 
 <p align="center">
   Notifyr is an open-source developer tool for testing and debugging FHIR Subscription notifications.
-  Point your FHIR server's code>rest-hook</code>  <code>Subscription</code> at a temporary Notifyr endpoint and see exactly what it sends—handshakes, heartbeats, events, headers, validation results, delivery behavior, and event continuity.  
+  Point your FHIR server's <code>rest-hook</code>  <code>Subscription</code> at a temporary Notifyr endpoint and see exactly what it sends—handshakes, heartbeats, events, headers, validation results, delivery behavior, and event continuity.  
 </p>
 
 
