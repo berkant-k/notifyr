@@ -1,11 +1,11 @@
 <h1 align="center">Notifyr</h1>
 
 <p align="center">
-  Notifyr is an open-source developer tool for testing and debugging FHIR Subscription notifications.
-  Point your FHIR server's <code>rest-hook</code>  <code>Subscription</code> at a temporary Notifyr endpoint and see exactly what it sends—handshakes, heartbeats, events, headers, validation results, delivery behavior, and event continuity.  
+  Notifyr is an open-source developer tool for testing and debugging FHIR <code>Subscription</code> notifications.
+  Point your FHIR server's <code>rest-hook</code> channel at a temporary Notifyr endpoint and see exactly
+  what it sends — handshakes, heartbeats, event notifications, headers, validation results, delivery
+  behaviour and event continuity — live, from the receiver's side.
 </p>
-
-
 
 <p align="center">
   <a href="https://github.com/berkant-k/notifyr/actions/workflows/ci.yml"><img src="https://github.com/berkant-k/notifyr/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -18,40 +18,43 @@
   <img src="docs/ss/notification-receiver.png" width="880"
        alt="Notifyr endpoint dashboard: the webhook URL with a copy button, Valid and Invalid counters reading 9 and 3, per-type tallies showing 1 handshake, 6 heartbeats and 2 event-notifications, and a list of the most recent notifications with timestamp, validity badge, HTTP status and summary.">
 </p>
-<p allign="center">
-  <img src="docs/ss/message-detail.png" width="880"
-       alt="Notifyr message detail: the message raw body and related validations">
-</p>
-
 <p align="center">
   <em>A live dashboard during the fhir-candle walkthrough — one handshake, six<br>
   heartbeats, two event-notifications, and one payload that failed validation.</em>
+</p>
+
+<p align="center">
+  <img src="docs/ss/message-detail.png" width="880"
+       alt="Notifyr message detail: the raw body exactly as sent, the request headers, and the validation results for one notification.">
+</p>
+
+<p align="center">
+  <em>One notification opened: the raw body as sent, request headers,<br>
+  and every validation error and warning with its location.</em>
 </p>
 
 ---
 
 ## Why
 
-FHIR Subscription implementations can be difficult to debug.
+FHIR Subscription implementations are hard to debug from the sending side. A
+generic webhook inspector can show you that an HTTP request arrived, but it
+cannot tell you whether that request was a valid FHIR Subscription
+notification, or whether the notification stream as a whole is behaving
+correctly.
 
-A generic webhook inspector can show you that an HTTP request arrived.
-It does not understand whether that request is a valid FHIR
-Subscription notification or whether the notification stream is
-behaving correctly.
-
-Testing a `rest-hook` subscription normally means standing up a publicly
+Testing a `rest-hook` subscription also normally means standing up a publicly
 reachable server just to find out whether your FHIR server's notifications
-actually work. Notifyr replaces that with a URL you create in one click.
+actually work. Notifyr replaces that with a URL you create in one click, and
+shows you, for every delivery:
 
-Point your FHIR server at Notifyr and see exactly what it sends:
-- 🔗 Subscription handshakes
-- 💓 Heartbeats
-- 📩 Event notifications
-- ✅ FHIR validation
-- 🔢 Event continuity and gap detection
-- ⏱️ Delivery timing
-- ⚠️ Workflow diagnostics
-- 🔄 Receiver response simulation
+- 🔗 Handshakes, 💓 heartbeats and 📩 event notifications, tallied separately
+- ✅ FHIR validation of every payload, with each problem located and explained
+- 🔢 Event-counter gaps — notifications that never reached you
+- ⏱️ Late or missing heartbeats
+- ⚠️ Payload-level and envelope checks against the `Subscription` you configured
+- 🔄 Receiver response simulation — answer with an error and watch the sender
+  react
 
 **The subject is the notification workflow, not the payload.** Notifyr is not a
 general FHIR resource validator — it is the receiving half of a subscription,
@@ -60,7 +63,7 @@ arrive, are heartbeats on time, did an event go missing, does what turned up
 match the `Subscription` you configured, and how does your server behave when
 the endpoint answers with an error.
 
-Point a `Subscription` at it, and every transaction that arrives is:
+In more detail, every notification that arrives is:
 
 - **Captured in full** — the raw body exactly as sent, even when it is
   malformed, because an unparseable payload is the one you most need to see.
@@ -91,22 +94,117 @@ only know R4, so they reject every handshake outright — the two notification
 types that carry the workflow are exactly the two a stock validator throws out.
 See [docs/DESIGN.md](docs/DESIGN.md#subscription-notifications).
 
-
 ## Who is Notifyr for?
 
-Notifyr is useful for developers and teams working with:
+- **FHIR server developers** adding or troubleshooting `rest-hook`
+  Subscription support (R4B, R5, or R4 with the Subscriptions Backport IG — the
+  R4 `Parameters` notification form is not supported yet) who need to see what
+  their server actually sends.
+- **Integration and interoperability engineers** — HIE, EMR/EHR and
+  middleware teams — wiring a receiver to a Subscription and needing to know
+  what will arrive before writing code against it.
+- **Testers and QA** verifying a Subscription end to end: did the handshake
+  fire, are heartbeats on time, was every event delivered, and how does the
+  server behave when the receiver answers with an error.
 
-- FHIR servers
-- FHIR Subscriptions
-- HL7 FHIR R4/R4B/R5
-- FHIR Subscription Backport
-- Health Information Exchanges (HIE)
-- EMR/EHR integrations
-- Healthcare interoperability
-- `rest-hook` notification workflows
+No FHIR server of your own yet? The [walkthrough](#walkthrough-a-real-subscription-with-fhir-candle)
+below uses fhir-candle, so you can watch a real subscription before you have one.
 
-It is particularly useful when implementing or troubleshooting
-FHIR Subscription support in a FHIR server or integration platform.
+## What a test run looks like
+
+Three sequences cover most of what a tester needs to prove about a
+`rest-hook` Subscription. Notifyr is the receiver in each one.
+
+### Establishing the Subscription and receiving the first event
+
+```mermaid
+sequenceDiagram
+    autonumber
+
+    participant T as Tester
+    participant F as FHIR Server
+    participant N as Notifyr
+
+    T->>F: Create Subscription
+    F-->>T: Subscription created
+
+    F->>N: Handshake notification
+    N-->>F: HTTP 200
+
+    Note over F,N: Subscription established
+
+    T->>F: Create or update a matching resource
+
+    Note over F: Matching event detected
+
+    F->>N: Event notification
+    N-->>F: HTTP 200
+
+    T->>N: Check the dashboard
+
+    Note over T,N: ✓ Handshake received<br/>✓ Event received<br/>✓ Both valid
+```
+
+### Detecting late or missing heartbeats
+
+Only heartbeats reset the timer, and the first one is never late — there is
+nothing to measure it against yet.
+
+```mermaid
+sequenceDiagram
+    autonumber
+
+    participant F as FHIR Server
+    participant N as Notifyr
+
+    Note over F,N: Subscription is already active
+
+    F->>N: Heartbeat
+    N-->>F: HTTP 200
+
+    Note over N: Start / reset heartbeat timer
+
+    Note over F,N: No heartbeat arrives
+
+    Note over N: 1.5 × heartbeat period elapsed
+
+    N->>N: Check elapsed time
+
+    Note over N: ⚠ Heartbeat overdue<br/>Possible communication problem
+```
+
+### Detecting lost event notifications
+
+```mermaid
+sequenceDiagram
+    autonumber
+
+    participant F as FHIR Server
+    participant N as Notifyr
+
+    Note over F,N: Subscription is active
+
+    F->>N: Event #101
+    N->>N: Record event #101
+    N-->>F: HTTP 200
+
+    F->>N: Event #102
+    N->>N: Record event #102
+    N-->>F: HTTP 200
+
+    F->>N: Event #103
+    N->>N: Record event #103
+    N-->>F: HTTP 200
+
+    Note over F,N: Events #104, #105, #106 never arrive
+
+    F->>N: Event #107
+    N->>N: Detect sequence gap
+
+    Note over N: ⚠ Missed events:<br/>104, 105, 106
+
+    N-->>F: HTTP 200
+```
 
 ## Quick start
 
