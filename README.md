@@ -1,10 +1,11 @@
 <h1 align="center">Notifyr</h1>
 
 <p align="center">
-  A disposable webhook endpoint for verifying FHIR <code>Subscription</code>
-  <code>rest-hook</code> notification workflows — every delivery checked from
-  the receiver's side, live.
+  Notifyr is an open-source developer tool for testing and debugging FHIR Subscription notifications.
+  Point your FHIR server's code>rest-hook</code>  <code>Subscription</code> at a temporary Notifyr endpoint and see exactly what it sends—handshakes, heartbeats, events, headers, validation results, delivery behavior, and event continuity.  
 </p>
+
+
 
 <p align="center">
   <a href="https://github.com/berkant-k/notifyr/actions/workflows/ci.yml"><img src="https://github.com/berkant-k/notifyr/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -31,9 +32,26 @@
 
 ## Why
 
+FHIR Subscription implementations can be difficult to debug.
+
+A generic webhook inspector can show you that an HTTP request arrived.
+It does not understand whether that request is a valid FHIR
+Subscription notification or whether the notification stream is
+behaving correctly.
+
 Testing a `rest-hook` subscription normally means standing up a publicly
 reachable server just to find out whether your FHIR server's notifications
 actually work. Notifyr replaces that with a URL you create in one click.
+
+Point your FHIR server at Notifyr and see exactly what it sends:
+- 🔗 Subscription handshakes
+- 💓 Heartbeats
+- 📩 Event notifications
+- ✅ FHIR validation
+- 🔢 Event continuity and gap detection
+- ⏱️ Delivery timing
+- ⚠️ Workflow diagnostics
+- 🔄 Receiver response simulation
 
 **The subject is the notification workflow, not the payload.** Notifyr is not a
 general FHIR resource validator — it is the receiving half of a subscription,
@@ -72,6 +90,23 @@ it sounds: `SubscriptionStatus` arrived in FHIR **R4B**, and most JS validators
 only know R4, so they reject every handshake outright — the two notification
 types that carry the workflow are exactly the two a stock validator throws out.
 See [docs/DESIGN.md](docs/DESIGN.md#subscription-notifications).
+
+
+## Who is Notifyr for?
+
+Notifyr is useful for developers and teams working with:
+
+- FHIR servers
+- FHIR Subscriptions
+- HL7 FHIR R4/R4B/R5
+- FHIR Subscription Backport
+- Health Information Exchanges (HIE)
+- EMR/EHR integrations
+- Healthcare interoperability
+- `rest-hook` notification workflows
+
+It is particularly useful when implementing or troubleshooting
+FHIR Subscription support in a FHIR server or integration platform.
 
 ## Quick start
 
