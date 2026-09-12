@@ -11,7 +11,11 @@ import { PUT as putPayloadContent } from "@/app/api/endpoints/[endpointId]/paylo
 import { PUT as putResourceCounts } from "@/app/api/endpoints/[endpointId]/resource-counts/route";
 import { PUT as putRules } from "@/app/api/endpoints/[endpointId]/response-rules/route";
 import { POST as createEndpoint } from "@/app/api/endpoints/route";
-import { GET as hookGet, POST as hookPost } from "@/app/hook/[endpointId]/[[...path]]/route";
+import {
+  GET as hookGet,
+  POST as hookPost,
+  PUT as hookPut,
+} from "@/app/hook/[endpointId]/[[...path]]/route";
 import {
   MAX_RECENT_MESSAGES,
   type CreateEndpointResponse,
@@ -259,7 +263,7 @@ describe("POST /hook/:endpointId", () => {
     const response = await hookGet(new Request(`${ORIGIN}/hook/${id}`), params(id));
 
     expect(response.status).toBe(405);
-    expect(response.headers.get("Allow")).toBe("POST");
+    expect(response.headers.get("Allow")).toBe("POST, PUT");
     await expect(response.json()).resolves.toMatchObject({ dashboard: `/dashboard/${id}` });
 
     // The wire response stays a helpful pointer for whoever pasted the URL
@@ -274,7 +278,8 @@ describe("POST /hook/:endpointId", () => {
     expect(snapshot.messages[0].validationErrors).toEqual([
       {
         severity: "warning",
-        message: "Received an unexpected GET request. Subscription notifications are always POSTed.",
+        message:
+          "Received an unexpected GET request. Subscription notifications are always sent with a body (POST or PUT).",
       },
     ]);
   });
@@ -286,6 +291,28 @@ describe("POST /hook/:endpointId", () => {
     const snapshot: EndpointSnapshot = await (await poll(id)).json();
     expect(snapshot.messages[0].requestPath).toBeNull();
     expect(snapshot.messages[0].method).toBe("POST");
+  });
+
+  // Firely Server, among others, delivers rest-hook notifications via PUT
+  // rather than POST — graded identically, since a PUT body is exactly as
+  // much a notification attempt as a POST body.
+  it("captures a PUT exactly like a POST", async () => {
+    const id = await newEndpoint();
+    const response = await hookPut(
+      new Request(`${ORIGIN}/hook/${id}`, {
+        method: "PUT",
+        headers: { "content-type": FHIR_JSON },
+        body: '{"resourceType":"Patient","id":"a"}',
+      }),
+      params(id),
+    );
+
+    expect(response.status).toBe(200);
+
+    const snapshot: EndpointSnapshot = await (await poll(id)).json();
+    expect(snapshot.messages[0].method).toBe("PUT");
+    expect(snapshot.messages[0].isValid).toBe(true);
+    expect(snapshot.messages[0].summary).toBe("Patient/a");
   });
 });
 

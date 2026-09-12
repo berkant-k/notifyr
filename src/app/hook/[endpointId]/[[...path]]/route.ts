@@ -31,6 +31,20 @@ export async function POST(request: Request, { params }: Params) {
 }
 
 /**
+ * PUT /hook/:endpointId[/...path].
+ *
+ * The spec's own rest-hook delivery is POST, but not every server sends it
+ * that way — Firely Server, for one, PUTs rest-hook notifications by default.
+ * Graded identically to a POST: a PUT body is exactly as much a notification
+ * attempt as a POST body, and there is no reason this tool should only work
+ * with senders that picked one particular verb.
+ */
+export async function PUT(request: Request, { params }: Params) {
+  const { endpointId, path } = await params;
+  return capture(request, endpointId, path);
+}
+
+/**
  * GET /hook/:endpointId[/...path].
  *
  * Every GET is captured, `.../metadata` included — showing what actually
@@ -40,9 +54,9 @@ export async function POST(request: Request, { params }: Params) {
  *  - `.../metadata` still gets the capability statement `capture()` itself
  *    would not produce (see `lib/capabilityStatement.ts`), unless the
  *    endpoint does not exist, in which case that 404 is what should go back.
- *  - A bare GET on the base URL still gets the "POST only" pointer to the
- *    dashboard, since that is almost always someone pasting the URL into a
- *    browser and still the most useful thing to tell them.
+ *  - A bare GET on the base URL still gets a pointer to the dashboard, since
+ *    that is almost always someone pasting the URL into a browser and still
+ *    the most useful thing to tell them.
  */
 export async function GET(request: Request, { params }: Params) {
   const { endpointId, path } = await params;
@@ -56,10 +70,10 @@ export async function GET(request: Request, { params }: Params) {
   if (!path || path.length === 0) {
     return NextResponse.json(
       {
-        error: "This endpoint accepts POST only.",
+        error: "This endpoint accepts POST or PUT.",
         dashboard: `/dashboard/${endpointId}`,
       },
-      { status: 405, headers: { Allow: "POST" } },
+      { status: 405, headers: { Allow: "POST, PUT" } },
     );
   }
 

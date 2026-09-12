@@ -15,6 +15,7 @@ until you know the constraint.
 - [Expected Subscription end](#expected-subscription-end)
 - [Endpoint ids](#endpoint-ids)
 - [The /metadata reachability probe](#the-metadata-reachability-probe)
+- [PUT as well as POST](#put-as-well-as-post)
 - [Request headers](#request-headers)
 - [Project layout](#project-layout)
 - [Dependency notes](#dependency-notes)
@@ -370,17 +371,27 @@ wire, not whether it is recorded:
   whose whole premise is telling the truth about what arrived. A
   `documentation` string says the real thing instead.
 - **Any other GET is graded as an unexpected-but-harmless visit, not a
-  malformed POST.** A Subscription notification is always POSTed, so a GET's
-  usually-absent body is never run through `validateBody` — that would report
-  the ordinary case, nothing to send, as a fatal "Request body was empty."
+  malformed notification.** A Subscription notification always carries a
+  body — POSTed per the spec, or PUT by servers like Firely Server that
+  deliver rest-hook that way instead — so a GET's usually-absent body is
+  never run through `validateBody`; that would report the ordinary case,
+  nothing to send, as a fatal "Request body was empty."
   `unexpectedGetResult` in `lib/validation.ts` grades it `isValid: true` with
   a `warning` finding instead. This covers a bare GET on the base URL and an
   unexpected subpath alike, with the path attached where there is one
   (`Message.requestPath`, shown in the list and the detail view). A bare GET
-  still gets the "POST only" pointer to the dashboard on the wire — that is
-  almost always someone pasting the URL into a browser, and still the most
-  useful thing to tell them — but the visit is no longer invisible to the
-  message list.
+  still gets a pointer to the dashboard on the wire — that is almost always
+  someone pasting the URL into a browser, and still the most useful thing to
+  tell them — but the visit is no longer invisible to the message list.
+
+## PUT as well as POST
+
+The webhook route accepts `PUT` alongside `POST`, graded identically —
+`capture()` in the route only branches on method to special-case `GET`.
+Not every rest-hook implementation sends POST: Firely Server, for one, PUTs
+its rest-hook notifications by default. There is no reason Notifyr should
+only work with senders that picked one particular verb, so both are treated
+as equally valid ways to arrive with a notification body.
 
 `fhirVersion` in the statement is `4.0.1` rather than R4B or R5: nothing
 observed cross-checks it against the Subscription actually under test, so the
