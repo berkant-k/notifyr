@@ -4,10 +4,10 @@
  * Three tiers, each a hard gate on the next:
  *   1. Body is parseable JSON.
  *   2. It is a JSON object carrying a `resourceType` string.
- *   3. It passes the `fhir` package's R4 structural + value-set validation.
+ *   3. It passes the `fhir-tool` package's R4 structural + value-set validation.
  *
- * Subscription notification Bundles are handled specially at tier 3: the `fhir`
- * package only knows R4, and `SubscriptionStatus` arrived in R4B, so those
+ * Subscription notification Bundles are handled specially at tier 3: the
+ * `fhir-tool` package only knows R4, and `SubscriptionStatus` arrived in R4B, so those
  * entries are validated by `lib/subscription.ts` instead. Without that, every
  * handshake and heartbeat would be reported invalid.
  *
@@ -16,7 +16,7 @@
  * than blaming the sender for our validator crashing.
  */
 
-import { Fhir } from "fhir";
+import { Fhir } from "fhir-tool";
 import { SPECS } from "@/lib/specs";
 import { inspectNotificationBundle } from "@/lib/subscription";
 import type { NotificationType, PayloadContent, ValidationError } from "@/lib/types";

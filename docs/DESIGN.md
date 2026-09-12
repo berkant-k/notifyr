@@ -89,7 +89,7 @@ only judged on rules it could plausibly satisfy.
 
 1. **Body parses as JSON** — otherwise `400`.
 2. **It is a JSON object with a `resourceType` string** — otherwise `422`.
-3. **It passes the `fhir` package's R4 structural and value-set validation** —
+3. **It passes the `fhir-tool` package's R4 structural and value-set validation** —
    otherwise `422`.
 
 Tier 3 is best-effort: if the validator itself throws, the message stays valid
@@ -108,7 +108,7 @@ This is the part that needs the most explanation.
 A rule-by-rule map of what is checked, what is only partly checked and what is
 not built yet lives in [VALIDATION.md](VALIDATION.md).
 
-The `fhir` npm package ships **R4 conformance only**, and `SubscriptionStatus`
+The `fhir-tool` npm package ships **R4 conformance only**, and `SubscriptionStatus`
 was introduced in **R4B**. Left to itself the validator does not merely
 mis-grade a handshake — it does not recognise the resource type at all:
 
@@ -160,7 +160,7 @@ Every finding Notifyr raises itself carries the page that states the rule, in
 `ValidationError.spec`, and the detail view renders it as a link beside the
 message. The URLs live in one place, `src/lib/specs.ts`, which the References
 list on the home page also reads — so a finding's citation and the published
-reference list cannot drift apart. Findings from the `fhir` package are left
+reference list cannot drift apart. Findings from the `fhir-tool` package are left
 uncited: they come from R4 conformance resources rather than from a page.
 
 Citations are applied per block rather than per push — envelope rules, then
@@ -423,19 +423,20 @@ purpose; deleting them only recreates an uncommitted change.
 
 ## Dependency notes
 
-### The lodash advisory in `fhir` cannot be fixed
+### `fhir` was renamed to `fhir-tool`, dropping the bundled lodash
 
-`npm audit` reports two advisories (one high, one moderate) against lodash
-4.17.21, which the `fhir` package ships **bundled inside its own tarball**.
-Because it is bundled:
+The FHIR validation library (the same `lantanagroup/FHIR.js` project) was
+renamed from `fhir` to `fhir-tool` on npm. Notifyr depends on `fhir-tool` for
+that reason, not for new functionality — `fhir.js` (the file exporting the
+`Fhir` class Notifyr uses) is byte-identical between the two packages, same
+`validate()` signature and exports.
 
-- npm `overrides` are silently ignored — the nested copy is not resolved.
-- `npm audit fix --force` would *downgrade* `fhir` to 3.x.
-- Dependabot cannot fix it either.
-
-No file in `fhir`'s shipped JavaScript references lodash at all, so no code path
-loads it. Expect the advisory to persist until `fhir` ships a release without
-the bundled copy.
+The rename matters because the old `fhir` package bundled lodash 4.17.21
+**inside its own tarball**, which `npm audit` flagged as two advisories (one
+high, one moderate). Being bundled meant npm `overrides` couldn't reach it and
+Dependabot couldn't fix it either. `fhir-tool@5.x` ships without the bundled
+lodash at all — its only dependency is `xml-js` — so the advisories are gone,
+not just hidden.
 
 ### TypeScript and ESLint major bumps are ignored
 

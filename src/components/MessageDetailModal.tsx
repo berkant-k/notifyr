@@ -231,7 +231,7 @@ export default function MessageDetailModal({ message, onClose }: Props) {
                     )}
                     {issue.message}
                     {/*
-                      Findings from the `fhir` package have no page to cite, so
+                      Findings from the `fhir-tool` package have no page to cite, so
                       the link is conditional rather than a constant fixture.
                     */}
                     {issue.spec && (

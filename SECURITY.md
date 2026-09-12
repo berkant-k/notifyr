@@ -39,12 +39,6 @@ issues or pull requests.
 - **Anything POSTed is stored and displayed verbatim**, including malformed
   payloads. Do not send real patient data or any other sensitive information.
 
-- **`npm audit` reports advisories against lodash**, which the `fhir` package
-  ships bundled inside its own tarball. It cannot be patched by `overrides` or
-  by Dependabot, and no file in `fhir`'s shipped JavaScript references lodash,
-  so no code path loads it. See
-  [docs/DESIGN.md](docs/DESIGN.md#dependency-notes).
-
 ## What is worth reporting
 
 Things outside the list above, for example:
