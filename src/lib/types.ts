@@ -213,7 +213,7 @@ export interface ValidationError {
   /**
    * The page stating the rule, from `lib/specs`. Set on every finding Notifyr
    * raises itself, so a disagreement can be settled against the spec rather
-   * than against this tool. Absent on findings from the `fhir` package, which
+   * than against this tool. Absent on findings from the `fhir-tool` package, which
    * come from R4 conformance resources rather than a page.
    */
   spec?: string;

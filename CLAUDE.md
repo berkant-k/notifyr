@@ -45,7 +45,7 @@ version and re-renders.
 
 Four constraints explain most of the code that otherwise looks odd:
 
-- **The `fhir` npm package ships R4 conformance only, and `SubscriptionStatus`
+- **The `fhir-tool` npm package ships R4 conformance only, and `SubscriptionStatus`
   arrived in R4B.** Left alone the validator does not recognise the resource type
   at all, so every handshake and heartbeat would be invalid. `lib/subscription.ts`
   validates `SubscriptionStatus` entries itself and hands the rest of the Bundle
@@ -91,9 +91,9 @@ configured.
 
 `docs/DESIGN.md` is the authoritative "why" document, including the full
 validation error/warning rules, the project layout, and known dependency
-constraints (the bundled-lodash advisory in `fhir` cannot be fixed; TypeScript
-and ESLint majors are pinned back by `eslint-config-next`). Read it before
-changing validation, storage or the polling loop.
+constraints (`fhir` was renamed to `fhir-tool`, dropping the bundled lodash;
+TypeScript and ESLint majors are pinned back by `eslint-config-next`). Read it
+before changing validation, storage or the polling loop.
 
 ## Conventions
 

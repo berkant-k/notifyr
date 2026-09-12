@@ -44,7 +44,7 @@ const ACTIVE = {
 };
 
 describe("accepted notifications", () => {
-  // Regression guard: the `fhir` package ships R4 only and SubscriptionStatus
+  // Regression guard: the `fhir-tool` package ships R4 only and SubscriptionStatus
   // arrived in R4B, so without lib/subscription.ts this is reported invalid.
   it("accepts the reference handshake payload with no issues at all", () => {
     const result = validateBody(JSON.stringify(HANDSHAKE), FHIR_JSON);
@@ -624,7 +624,7 @@ describe("spec citations", () => {
     }
   });
 
-  // The `fhir` package validates against R4 conformance resources, not a page.
+  // The `fhir-tool` package validates against R4 conformance resources, not a page.
   it("leaves library findings uncited", () => {
     const result = validateBody('{"resourceType":"Patient","gender":"NOT-A-GENDER"}', FHIR_JSON);
     const issue = result.validationErrors.find((e) => e.location === "Patient.gender");

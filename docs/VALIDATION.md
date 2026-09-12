@@ -61,14 +61,14 @@ profile `http://hl7.org/fhir/uv/subscriptions-backport/StructureDefinition/backp
 | "the first `entry` of the bundle SHALL be the `SubscriptionStatus` information" (invariant `backport-notification-bundle-1`) | warning | **Done** — warning rather than error, per [above](#severity-is-not-conformance) |
 | `Bundle.timestamp` carried on a notification | warning | **Done** |
 | `Bundle.entry` is 1..\* | — | **Partial** — implied only: with no entries there is no `SubscriptionStatus`, so the body is never recognised as a notification and falls through to ordinary resource validation |
-| Invariants `bdl-3`/`bdl-4`: a history Bundle "require[s] a `Bundle.entry.request` element for *every* `Bundle.entry`" | — | **Not yet** — the `fhir` package validates structure and value sets, not invariants, so nothing checks this today |
+| Invariants `bdl-3`/`bdl-4`: a history Bundle "require[s] a `Bundle.entry.request` element for *every* `Bundle.entry`" | — | **Not yet** — the `fhir-tool` package validates structure and value sets, not invariants, so nothing checks this today |
 | The status entry's "request SHALL be filled out to match a request to the `$status` operation" | — | **Not yet** |
 | Other entries' request "SHOULD be filled out in a way that makes sense given the subscription" | — | **Not yet** |
 | Non-`SubscriptionStatus` entries pass R4 structural and value-set validation | error | **Done** — the entry is kept and only its `resource` dropped, so sibling resources are still validated and entry indices still line up |
 
 ## 2. SubscriptionStatus content (R4B/R5)
 
-Implemented in `src/lib/subscription.ts`, because the `fhir` package ships R4
+Implemented in `src/lib/subscription.ts`, because the `fhir-tool` package ships R4
 conformance only and does not recognise the resource type at all. See
 [DESIGN.md](DESIGN.md#subscription-notifications).
 
