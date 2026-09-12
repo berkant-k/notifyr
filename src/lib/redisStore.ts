@@ -30,6 +30,7 @@ import {
   type Message,
   type NewMessage,
   type PayloadContent,
+  type ResourceCounts,
   type ResponseRule,
   type ResponseRules,
   type SubscriptionContinuity,
@@ -106,6 +107,15 @@ const MAX_TRACKED_SUBSCRIPTIONS = 20;
 
 const endpointKey = (id: string) => `endpoint:${id}`;
 const messagesKey = (id: string) => `endpoint:${id}:messages`;
+/**
+ * Its own key rather than a field on `endpointKey`, unlike `expectedResourceCounts`:
+ * resource type is an open set `toHash`/`fromHash` cannot enumerate, and a
+ * JSON blob incremented by read-modify-write on every webhook POST would be
+ * both hotter than `continuity`'s occasional fold and would reintroduce the
+ * exact race HINCRBY exists elsewhere to avoid. One field per type here keeps
+ * increments atomic the same way the notification-type counters are.
+ */
+const resourceCountsKey = (id: string) => `endpoint:${id}:resourceCounts`;
 
 export class RedisStore implements MessageStore {
   constructor(private readonly redis: RedisLike) {}
@@ -127,12 +137,14 @@ export class RedisStore implements MessageStore {
 
   async getEndpoint(endpointId: string): Promise<Endpoint | null> {
     const key = endpointKey(endpointId);
-    const [hash, ttl] = (await this.redis.pipeline().hgetall(key).ttl(key).exec()) as [
-      Record<string, unknown> | null,
-      number,
-    ];
+    const [hash, ttl, resourceCountsHash] = (await this.redis
+      .pipeline()
+      .hgetall(key)
+      .ttl(key)
+      .hgetall(resourceCountsKey(endpointId))
+      .exec()) as [Record<string, unknown> | null, number, Record<string, unknown> | null];
 
-    return hash && hash.id !== undefined ? fromHash(hash, ttl) : null;
+    return hash && hash.id !== undefined ? fromHash(hash, ttl, resourceCountsHash) : null;
   }
 
   /**
@@ -170,9 +182,20 @@ export class RedisStore implements MessageStore {
     if (message.isValid && message.notificationType) {
       pipeline.hincrby(key, countField(message.notificationType), 1);
     }
+    // Same rule, extended to resource type: an invalid Bundle hasn't
+    // established what it touched any more than what type it was.
+    if (message.isValid) {
+      for (const type of message.focusResourceTypes) {
+        pipeline.hincrby(resourceCountsKey(endpointId), type, 1);
+      }
+    }
     pipeline.hincrby(key, "version", 1);
     pipeline.expire(key, endpointTtlSeconds());
     pipeline.expire(messagesKey(endpointId), endpointTtlSeconds());
+    // Refreshed unconditionally, like the other two keys, even on a message
+    // that touched no resources — EXPIRE on a key with no fields yet is a
+    // harmless no-op, and this keeps the TTL in step once one does exist.
+    pipeline.expire(resourceCountsKey(endpointId), endpointTtlSeconds());
 
     await pipeline.exec();
     return message;
@@ -193,6 +216,8 @@ export class RedisStore implements MessageStore {
       .expire(endpointKey(endpointId), endpointTtlSeconds())
       .expire(messagesKey(endpointId), endpointTtlSeconds())
       .ttl(endpointKey(endpointId))
+      .hgetall(resourceCountsKey(endpointId))
+      .expire(resourceCountsKey(endpointId), endpointTtlSeconds())
       .exec();
 
     const hash = results[0] as Record<string, unknown> | null;
@@ -201,8 +226,9 @@ export class RedisStore implements MessageStore {
     // Nothing is deep-copied on the way out: deserialising is already a copy,
     // so "snapshots must not alias live state" holds by construction here.
     const raw = (results[1] ?? []) as unknown[];
+    const resourceCountsHash = results[5] as Record<string, unknown> | null;
     return {
-      endpoint: fromHash(hash, results[4] as number),
+      endpoint: fromHash(hash, results[4] as number, resourceCountsHash),
       messages: raw.map((entry) => parseJson<Message>(entry)).filter((m): m is Message => m !== null),
     };
   }
@@ -291,6 +317,25 @@ export class RedisStore implements MessageStore {
     return this.getEndpoint(endpointId);
   }
 
+  async updateExpectedResourceCounts(
+    endpointId: string,
+    expected: ResourceCounts,
+  ): Promise<Endpoint | null> {
+    const key = endpointKey(endpointId);
+    if ((await this.redis.exists(key)) === 0) return null;
+
+    // Absent means unset, same as expectedPayloadContent/expectedEnd — an
+    // empty object is "nothing configured" and gets deleted rather than
+    // stored as an empty JSON blob.
+    if (Object.keys(expected).length === 0) await this.redis.hdel(key, "expectedResourceCounts");
+    else await this.redis.hset(key, { expectedResourceCounts: JSON.stringify(expected) });
+
+    // resourceCounts lives in its own key and is not touched here; see the interface.
+    await this.redis.pipeline().hincrby(key, "version", 1).expire(key, endpointTtlSeconds()).exec();
+
+    return this.getEndpoint(endpointId);
+  }
+
   async recordContinuity(
     endpointId: string,
     observation: Omit<ContinuityObservation, "heartbeatPeriodSeconds">,
@@ -335,6 +380,8 @@ function newEndpoint(id: string): Endpoint {
     heartbeatPeriodSeconds: DEFAULT_HEARTBEAT_PERIOD_SECONDS,
     expectedEnd: null,
     afterEndCount: 0,
+    expectedResourceCounts: {},
+    resourceCounts: {},
     continuity: [],
     version: 0,
     // Filled in by the caller once the TTL it wrote is known.
@@ -366,6 +413,9 @@ function toHash(endpoint: Endpoint): Record<string, string | number> {
     hash.expectedPayloadContent = endpoint.expectedPayloadContent;
   }
   if (endpoint.expectedEnd !== null) hash.expectedEnd = endpoint.expectedEnd;
+  if (Object.keys(endpoint.expectedResourceCounts).length > 0) {
+    hash.expectedResourceCounts = JSON.stringify(endpoint.expectedResourceCounts);
+  }
 
   return hash;
 }
@@ -377,7 +427,11 @@ function toHash(endpoint: Endpoint): Record<string, string | number> {
  * of its two negatives — -1 for a key with no expiry set, -2 for one that is
  * already gone. Both become a null `expiresAt`, since neither names a moment.
  */
-function fromHash(hash: Record<string, unknown>, ttl: number): Endpoint {
+function fromHash(
+  hash: Record<string, unknown>,
+  ttl: number,
+  resourceCountsHash: Record<string, unknown> | null,
+): Endpoint {
   const notificationCounts = emptyNotificationCounts();
   for (const type of NOTIFICATION_TYPES) {
     notificationCounts[type] = numberFrom(hash[countField(type)]);
@@ -408,9 +462,17 @@ function fromHash(hash: Record<string, unknown>, ttl: number): Endpoint {
         ? null
         : String(hash.expectedEnd),
     afterEndCount: numberFrom(hash.afterEndCount),
+    expectedResourceCounts: parseJson<ResourceCounts>(hash.expectedResourceCounts) ?? {},
+    resourceCounts: resourceCountsFrom(resourceCountsHash),
     continuity: readContinuity(hash),
     version: numberFrom(hash.version),
   };
+}
+
+function resourceCountsFrom(hash: Record<string, unknown> | null): ResourceCounts {
+  const counts: ResourceCounts = {};
+  for (const [type, value] of Object.entries(hash ?? {})) counts[type] = numberFrom(value);
+  return counts;
 }
 
 function readContinuity(hash: Record<string, unknown>): SubscriptionContinuity[] {

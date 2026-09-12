@@ -38,6 +38,8 @@ export interface ValidationResult {
   topic: string | null;
   /** `SubscriptionStatus.subscription.reference`, for continuity tracking. */
   subscriptionReference: string | null;
+  /** FHIR resource types named by `notificationEvent[].focus`. Empty when none. */
+  focusResourceTypes: string[];
 }
 
 /**
@@ -74,6 +76,7 @@ export function validateBody(
       eventsSinceSubscriptionStart: null,
       topic: null,
       subscriptionReference: null,
+      focusResourceTypes: [],
     };
   }
 
@@ -94,6 +97,7 @@ export function validateBody(
       eventsSinceSubscriptionStart: null,
       topic: null,
       subscriptionReference: null,
+      focusResourceTypes: [],
     };
   }
 
@@ -113,6 +117,7 @@ export function validateBody(
       eventsSinceSubscriptionStart: null,
       topic: null,
       subscriptionReference: null,
+      focusResourceTypes: [],
     };
   }
 
@@ -132,6 +137,7 @@ export function validateBody(
       eventsSinceSubscriptionStart: null,
       topic: null,
       subscriptionReference: null,
+      focusResourceTypes: [],
     };
   }
 
@@ -170,6 +176,7 @@ export function validateBody(
     eventsSinceSubscriptionStart: notification?.eventsSinceSubscriptionStart ?? null,
     topic: notification?.topic ?? null,
     subscriptionReference: notification?.subscriptionReference ?? null,
+    focusResourceTypes: notification?.focusResourceTypes ?? [],
   };
 }
 

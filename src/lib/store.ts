@@ -31,6 +31,7 @@ import {
   type Message,
   type NewMessage,
   type PayloadContent,
+  type ResourceCounts,
   type ResponseRules,
   type SubscriptionContinuity,
   type ValidationError,
@@ -90,6 +91,17 @@ export interface MessageStore {
    */
   updateExpectedEnd(endpointId: string, expectedEnd: string | null): Promise<Endpoint | null>;
   /**
+   * Replace the resource-type expectations wholesale — the natural action for
+   * a form editing a whole list of rows, unlike `updateResponseRules`'s
+   * per-switch merge. Returns null when the endpoint does not exist. Never
+   * touches `resourceCounts`: counts already tallied stay tallied against
+   * whatever expectation was in force when they arrived.
+   */
+  updateExpectedResourceCounts(
+    endpointId: string,
+    expected: ResourceCounts,
+  ): Promise<Endpoint | null>;
+  /**
    * Fold one validated notification into its subscription's continuity record,
    * returning whatever that revealed — a late heartbeat, a jump in the event
    * counter — for the caller to store on the message.
@@ -147,6 +159,8 @@ export class InMemoryStore implements MessageStore {
       // notification as late on an endpoint nobody had configured.
       expectedEnd: null,
       afterEndCount: 0,
+      expectedResourceCounts: {},
+      resourceCounts: {},
       continuity: [],
       version: 0,
     };
@@ -188,6 +202,14 @@ export class InMemoryStore implements MessageStore {
       endpoint.notificationCounts[message.notificationType] += 1;
     }
 
+    // Same rule, extended to resource type: an invalid Bundle hasn't
+    // established what it touched any more than what type it was.
+    if (message.isValid) {
+      for (const type of message.focusResourceTypes) {
+        endpoint.resourceCounts[type] = (endpoint.resourceCounts[type] ?? 0) + 1;
+      }
+    }
+
     endpoint.version += 1;
 
     return message;
@@ -207,6 +229,8 @@ export class InMemoryStore implements MessageStore {
         notificationCounts: { ...endpoint.notificationCounts },
         responseRules: structuredClone(endpoint.responseRules),
         continuity: structuredClone(endpoint.continuity),
+        expectedResourceCounts: { ...endpoint.expectedResourceCounts },
+        resourceCounts: { ...endpoint.resourceCounts },
       },
       messages: (this.messages.get(endpointId) ?? []).slice(0, limit),
     };
@@ -270,6 +294,25 @@ export class InMemoryStore implements MessageStore {
     endpoint.version += 1;
 
     return { ...endpoint, responseRules: structuredClone(endpoint.responseRules) };
+  }
+
+  async updateExpectedResourceCounts(
+    endpointId: string,
+    expected: ResourceCounts,
+  ): Promise<Endpoint | null> {
+    const endpoint = this.endpoints.get(endpointId);
+    if (!endpoint) return null;
+
+    endpoint.expectedResourceCounts = { ...expected };
+    // resourceCounts is deliberately left alone; see the interface.
+    endpoint.version += 1;
+
+    return {
+      ...endpoint,
+      responseRules: structuredClone(endpoint.responseRules),
+      expectedResourceCounts: { ...endpoint.expectedResourceCounts },
+      resourceCounts: { ...endpoint.resourceCounts },
+    };
   }
 
   async recordContinuity(

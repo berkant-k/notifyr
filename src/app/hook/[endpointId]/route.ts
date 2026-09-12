@@ -84,6 +84,7 @@ export async function POST(
     notificationType: result.notificationType,
     eventsSinceSubscriptionStart: result.eventsSinceSubscriptionStart,
     topic: result.topic,
+    focusResourceTypes: result.focusResourceTypes,
     headers: captureHeaders(request),
     rawBody,
     validationErrors: [...result.validationErrors, ...continuityFindings, ...expiryFindings],

@@ -14,6 +14,7 @@
 import { payloadShape, validatePayloadShape } from "@/lib/payload";
 import { SPECS } from "@/lib/specs";
 import {
+  isResourceTypeName,
   NOTIFICATION_TYPE_LABELS,
   NOTIFICATION_TYPES,
   type NotificationType,
@@ -48,6 +49,14 @@ export interface NotificationInfo {
    * shortened into the summary.
    */
   subscriptionReference: string | null;
+  /**
+   * FHIR resource types named by `notificationEvent[].focus`, in order,
+   * duplicates included. `additionalContext` is deliberately excluded: it
+   * names related resources, not the one that changed, so counting it would
+   * over-count against what a user actually means by "2 Encounter
+   * notifications". Empty for anything other than an event-notification.
+   */
+  focusResourceTypes: string[];
 }
 
 /**
@@ -108,6 +117,7 @@ export function inspectNotificationBundle(
   // Payload rules describe what an event-notification carries. A handshake or
   // heartbeat carries nothing whatever the Subscription was configured with, so
   // checking them would report every heartbeat as failing "id-only".
+  let focusResourceTypes: string[] = [];
   if (type === "event-notification") {
     const payloadErrors: ValidationError[] = [];
     validatePayloadShape(
@@ -118,6 +128,8 @@ export function inspectNotificationBundle(
     );
     cite(payloadErrors, SPECS.payloads);
     errors.push(...payloadErrors);
+
+    focusResourceTypes = resourceTypesOf(status);
   }
 
   // Strip only the SubscriptionStatus resources; keep their entries so indices hold.
@@ -140,7 +152,53 @@ export function inspectNotificationBundle(
     eventsSinceSubscriptionStart: scalarOrNull(status.eventsSinceSubscriptionStart),
     topic: typeof status.topic === "string" && status.topic !== "" ? status.topic : null,
     subscriptionReference: subscriptionReferenceOf(status),
+    focusResourceTypes,
   };
+}
+
+/**
+ * The resource type named by each `notificationEvent[].focus.reference`, in
+ * order. A reference with no recognisable type segment (a bare id,
+ * `urn:uuid:...`) is skipped rather than reported: this is a counting feature
+ * riding on validity already computed elsewhere, not a new source of
+ * findings — a malformed focus reference is already flagged by
+ * `validateReference`.
+ */
+function resourceTypesOf(status: Record<string, unknown>): string[] {
+  const events = Array.isArray(status.notificationEvent) ? status.notificationEvent : [];
+  const types: string[] = [];
+
+  for (const event of events) {
+    const reference = asObject(asObject(event)?.focus)?.reference;
+    if (typeof reference !== "string") continue;
+
+    const type = resourceTypeFromReference(reference);
+    if (type) types.push(type);
+  }
+
+  return types;
+}
+
+/**
+ * The resource type is the second-to-last path segment of a reference — true
+ * for both a relative `Encounter/123` and an absolute
+ * `http://example.org/fhir/Encounter/123`, since the base URL never ends the
+ * path with anything but `{type}/{id}`. A trailing `_history/{vid}` is
+ * dropped first, since that pushes the type two segments further back.
+ *
+ * Splitting on `/` rather than matching from the start is what makes this
+ * safe against an absolute URL: a naive "first word before a slash" match
+ * would find a lower-cased path segment like "fhir" instead.
+ */
+function resourceTypeFromReference(reference: string): string | null {
+  const segments = reference.split("/").filter((segment) => segment.length > 0);
+
+  if (segments.length >= 2 && segments[segments.length - 2] === "_history") {
+    segments.length -= 2;
+  }
+
+  const type = segments[segments.length - 2];
+  return type !== undefined && isResourceTypeName(type) ? type : null;
 }
 
 /**

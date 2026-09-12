@@ -89,6 +89,29 @@ export function isPayloadContent(value: unknown): value is PayloadContent {
   return typeof value === "string" && (PAYLOAD_CONTENTS as readonly string[]).includes(value);
 }
 
+/**
+ * Tallies keyed by FHIR resource type, e.g. `{ Encounter: 2, Patient: 1 }`.
+ *
+ * Unlike `NotificationCounts` this is not a closed enum — any resource type
+ * name is valid — so there is no `emptyResourceCounts()`: an empty object
+ * means "nothing configured" or "nothing seen yet", and a type's key appears
+ * only once it is actually expected or actually tallied.
+ */
+export type ResourceCounts = Record<string, number>;
+
+/**
+ * Cap on distinct resource types configurable per endpoint. The other tallies
+ * in this file are bounded by a fixed enum; this one is user-supplied and
+ * open-ended, so it needs its own cap to keep a single endpoint's expectation
+ * list from growing without bound.
+ */
+export const MAX_EXPECTED_RESOURCE_TYPES = 25;
+
+/** A FHIR resource type name: PascalCase, e.g. "Patient", "MedicationRequest". */
+export function isResourceTypeName(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Z][A-Za-z0-9]{0,63}$/.test(value);
+}
+
 /** How Notifyr should answer one notification type. */
 export interface ResponseRule {
   /** True: answer normally. False: force `status` regardless of validity. */
@@ -241,6 +264,15 @@ export interface Message {
   /** `SubscriptionStatus.topic`, the canonical URL. Null when not sent. */
   topic: string | null;
   /**
+   * FHIR resource types this notification's `notificationEvent[].focus`
+   * entries named, in order, duplicates included. Empty for anything other
+   * than a valid event-notification. Recorded per message, like
+   * `expectedPayloadContent`, so `endpoint.resourceCounts` can be incremented
+   * without re-parsing the body and so the tally survives a later change to
+   * `expectedResourceCounts`.
+   */
+  focusResourceTypes: string[];
+  /**
    * True when `status` came from a response rule rather than from validation —
    * without this a forced 400 on a perfectly valid handshake looks like a bug.
    */
@@ -316,6 +348,21 @@ export interface Endpoint {
    * the end?" must not start answering no once the evidence is trimmed away.
    */
   afterEndCount: number;
+  /**
+   * FHIR resource type -> how many are expected, e.g. `{ Encounter: 2 }`. Set
+   * by the user because Notifyr never sees the test plan behind a Subscription
+   * any more than it sees the Subscription itself. Empty means nothing
+   * configured.
+   */
+  expectedResourceCounts: ResourceCounts;
+  /**
+   * FHIR resource type -> how many have arrived, cumulative like every other
+   * counter here. Tallied from `notificationEvent[].focus` on *valid*
+   * event-notifications only — an invalid Bundle has not established what it
+   * touched any more than what type it was. Changing `expectedResourceCounts`
+   * never touches this: counts already tallied stay tallied.
+   */
+  resourceCounts: ResourceCounts;
   /**
    * One record per Subscription seen, most recently active first. Event gaps
    * are tracked whether or not a heartbeat period is set — the sender supplies
