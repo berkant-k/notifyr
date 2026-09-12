@@ -227,6 +227,84 @@ describe.each(implementations)("$name store", ({ create }) => {
     });
   });
 
+  describe("resource counts", () => {
+    it("tallies valid event-notifications by focus resource type", async () => {
+      const { id } = await newEndpoint();
+      await store.addMessage(id, message({ focusResourceTypes: ["Encounter", "Encounter"] }));
+      await store.addMessage(id, message({ focusResourceTypes: ["Patient"] }));
+
+      const counts = (await store.getSnapshot(id))?.endpoint.resourceCounts;
+      expect(counts?.Encounter).toBe(2);
+      expect(counts?.Patient).toBe(1);
+    });
+
+    it("does not count an invalid notification's resource types", async () => {
+      const { id } = await newEndpoint();
+      await store.addMessage(
+        id,
+        message({ focusResourceTypes: ["Encounter"], isValid: false, status: 422 }),
+      );
+
+      expect((await store.getSnapshot(id))?.endpoint.resourceCounts.Encounter).toBeUndefined();
+    });
+
+    it("starts empty rather than pre-populated with any type", async () => {
+      const { id } = await newEndpoint();
+      expect((await store.getEndpoint(id))?.resourceCounts).toEqual({});
+    });
+
+    it("does not hand callers a live reference to the counts", async () => {
+      const { id } = await newEndpoint();
+      await store.addMessage(id, message({ focusResourceTypes: ["Encounter"] }));
+
+      const snapshot = (await store.getSnapshot(id))!;
+      snapshot.endpoint.resourceCounts.Encounter = 99;
+
+      expect((await store.getSnapshot(id))?.endpoint.resourceCounts.Encounter).toBe(1);
+    });
+  });
+
+  describe("expected resource counts", () => {
+    it("starts empty and round-trips a full replacement", async () => {
+      const { id } = await newEndpoint();
+      expect((await store.getEndpoint(id))?.expectedResourceCounts).toEqual({});
+
+      await store.updateExpectedResourceCounts(id, { Encounter: 2, Patient: 1 });
+      expect((await store.getEndpoint(id))?.expectedResourceCounts).toEqual({
+        Encounter: 2,
+        Patient: 1,
+      });
+
+      // Full replace, not a merge: setting a new map drops what isn't in it.
+      await store.updateExpectedResourceCounts(id, { Patient: 3 });
+      expect((await store.getEndpoint(id))?.expectedResourceCounts).toEqual({ Patient: 3 });
+
+      await store.updateExpectedResourceCounts(id, {});
+      expect((await store.getEndpoint(id))?.expectedResourceCounts).toEqual({});
+    });
+
+    it("bumps the version so an open dashboard picks it up", async () => {
+      const { id, version } = await newEndpoint();
+      await store.updateExpectedResourceCounts(id, { Encounter: 1 });
+
+      expect((await store.getEndpoint(id))?.version).toBe(version + 1);
+    });
+
+    it("returns null for an unknown endpoint", async () => {
+      expect(await store.updateExpectedResourceCounts("nope", { Encounter: 1 })).toBeNull();
+    });
+
+    // Setting an expectation is not a judgement about arrivals already tallied.
+    it("never touches resourceCounts", async () => {
+      const { id } = await newEndpoint();
+      await store.addMessage(id, message({ focusResourceTypes: ["Encounter"] }));
+
+      await store.updateExpectedResourceCounts(id, { Encounter: 5 });
+
+      expect((await store.getEndpoint(id))?.resourceCounts.Encounter).toBe(1);
+    });
+  });
+
   describe("expected payload content", () => {
     it("starts unset and round-trips a level", async () => {
       const { id } = await newEndpoint();

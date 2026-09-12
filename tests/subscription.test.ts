@@ -633,6 +633,127 @@ describe("spec citations", () => {
   });
 });
 
+describe("focusResourceTypes", () => {
+  it("extracts the type from a relative focus reference", () => {
+    const result = validateBody(
+      notification({
+        type: "event-notification",
+        notificationEvent: [{ eventNumber: "1", focus: { reference: "Encounter/example" } }],
+        ...ACTIVE,
+      }),
+      FHIR_JSON,
+    );
+    expect(result.focusResourceTypes).toEqual(["Encounter"]);
+  });
+
+  it("extracts the type from an absolute focus reference", () => {
+    const result = validateBody(
+      notification({
+        type: "event-notification",
+        notificationEvent: [
+          { eventNumber: "1", focus: { reference: "http://example.org/fhir/Encounter/123" } },
+        ],
+        ...ACTIVE,
+      }),
+      FHIR_JSON,
+    );
+    // A naive "first word before a slash" match would find "org" here instead.
+    expect(result.focusResourceTypes).toEqual(["Encounter"]);
+  });
+
+  it("drops a trailing _history/{vid} before reading the type", () => {
+    const result = validateBody(
+      notification({
+        type: "event-notification",
+        notificationEvent: [
+          {
+            eventNumber: "1",
+            focus: { reference: "http://example.org/fhir/Encounter/123/_history/2" },
+          },
+        ],
+        ...ACTIVE,
+      }),
+      FHIR_JSON,
+    );
+    expect(result.focusResourceTypes).toEqual(["Encounter"]);
+  });
+
+  it("excludes additionalContext, counting only focus", () => {
+    const result = validateBody(
+      notification({
+        type: "event-notification",
+        notificationEvent: [
+          {
+            eventNumber: "1",
+            focus: { reference: "Encounter/example" },
+            additionalContext: [{ reference: "Patient/example" }],
+          },
+        ],
+        ...ACTIVE,
+      }),
+      FHIR_JSON,
+    );
+    expect(result.focusResourceTypes).toEqual(["Encounter"]);
+  });
+
+  it("counts one occurrence per notificationEvent, duplicates included", () => {
+    const result = validateBody(
+      notification({
+        type: "event-notification",
+        notificationEvent: [
+          { eventNumber: "1", focus: { reference: "Encounter/a" } },
+          { eventNumber: "2", focus: { reference: "Encounter/b" } },
+          { eventNumber: "3", focus: { reference: "Patient/c" } },
+        ],
+        ...ACTIVE,
+      }),
+      FHIR_JSON,
+    );
+    expect(result.focusResourceTypes).toEqual(["Encounter", "Encounter", "Patient"]);
+  });
+
+  it("skips a focus reference with no recognisable type", () => {
+    const result = validateBody(
+      notification({
+        type: "event-notification",
+        notificationEvent: [
+          { eventNumber: "1", focus: { reference: "urn:uuid:1dd006b0-a65a-4b85-98b6-d363496d1f93" } },
+          { eventNumber: "2", focus: { reference: "example" } },
+          { eventNumber: "3", focus: { reference: "Patient/example" } },
+        ],
+        ...ACTIVE,
+      }),
+      FHIR_JSON,
+    );
+    expect(result.focusResourceTypes).toEqual(["Patient"]);
+  });
+
+  it("is empty for a notification with no focus at all", () => {
+    const result = validateBody(
+      notification({ type: "event-notification", notificationEvent: [{ eventNumber: "1" }], ...ACTIVE }),
+      FHIR_JSON,
+    );
+    expect(result.focusResourceTypes).toEqual([]);
+  });
+
+  it("is empty for a handshake or heartbeat, even if notificationEvent is present", () => {
+    const result = validateBody(
+      notification({
+        type: "heartbeat",
+        notificationEvent: [{ eventNumber: "1", focus: { reference: "Encounter/example" } }],
+        ...ACTIVE,
+      }),
+      FHIR_JSON,
+    );
+    expect(result.focusResourceTypes).toEqual([]);
+  });
+
+  it("is empty for an ordinary, non-notification resource", () => {
+    const result = validateBody('{"resourceType":"Patient","id":"a"}', FHIR_JSON);
+    expect(result.focusResourceTypes).toEqual([]);
+  });
+});
+
 describe("non-notifications", () => {
   it("leaves notificationType null for an ordinary resource", () => {
     const result = validateBody('{"resourceType":"Patient","id":"a"}', FHIR_JSON);

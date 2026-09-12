@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import EndpointCard from "@/components/EndpointCard";
+import ExpectedResourceCountsCard from "@/components/ExpectedResourceCountsCard";
 import HeartbeatPeriodCard from "@/components/HeartbeatPeriodCard";
 import LiveIndicator from "@/components/LiveIndicator";
 import MessageDetailModal from "@/components/MessageDetailModal";
@@ -268,6 +269,22 @@ export default function DashboardView({
               key={`expected-end-${snapshot.endpoint.expectedEnd ?? "unset"}`}
               expectedEnd={snapshot.endpoint.expectedEnd}
               afterEndCount={snapshot.endpoint.afterEndCount}
+              onChanged={refresh}
+            />
+          )}
+
+          {/*
+            Keyed on the stored expectation for the same reason as the
+            heartbeat and expected-end cards: rows hold local state while
+            being edited, so a change made in another tab has to remount the
+            card to be picked up.
+          */}
+          {snapshot && (
+            <ExpectedResourceCountsCard
+              endpointId={endpointId}
+              key={`resource-counts-${JSON.stringify(snapshot.endpoint.expectedResourceCounts)}`}
+              expected={snapshot.endpoint.expectedResourceCounts}
+              actual={snapshot.endpoint.resourceCounts}
               onChanged={refresh}
             />
           )}

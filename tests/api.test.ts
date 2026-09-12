@@ -8,6 +8,7 @@ import { GET as getMessages } from "@/app/api/endpoints/[endpointId]/messages/ro
 import { PUT as putExpectedEnd } from "@/app/api/endpoints/[endpointId]/expected-end/route";
 import { PUT as putHeartbeatPeriod } from "@/app/api/endpoints/[endpointId]/heartbeat-period/route";
 import { PUT as putPayloadContent } from "@/app/api/endpoints/[endpointId]/payload-content/route";
+import { PUT as putResourceCounts } from "@/app/api/endpoints/[endpointId]/resource-counts/route";
 import { PUT as putRules } from "@/app/api/endpoints/[endpointId]/response-rules/route";
 import { POST as createEndpoint } from "@/app/api/endpoints/route";
 import { GET as hookGet, POST as hookPost } from "@/app/hook/[endpointId]/route";
@@ -631,6 +632,129 @@ describe("expected payload content", () => {
     const snapshot: EndpointSnapshot = await (await poll(id)).json();
     expect(snapshot.messages[0].expectedPayloadContent).toBeNull();
     expect(snapshot.messages[0].validationErrors).toEqual([]);
+  });
+});
+
+describe("expected resource counts", () => {
+  function setExpected(endpointId: string, body: unknown) {
+    return putResourceCounts(
+      new Request(`${ORIGIN}/api/endpoints/${endpointId}/resource-counts`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+      params(endpointId),
+    );
+  }
+
+  /** An event-notification whose focus names an Encounter. */
+  const ENCOUNTER_EVENT = JSON.stringify({
+    resourceType: "Bundle",
+    type: "history",
+    timestamp: "2026-09-08T09:00:00Z",
+    entry: [
+      {
+        resource: {
+          resourceType: "SubscriptionStatus",
+          status: "active",
+          type: "event-notification",
+          subscription: { reference: "Subscription/notifyr-test" },
+          notificationEvent: [{ eventNumber: "1", focus: { reference: "Encounter/e1" } }],
+        },
+      },
+    ],
+  });
+
+  it("defaults to unset", async () => {
+    const id = await newEndpoint();
+    const snapshot: EndpointSnapshot = await (await poll(id)).json();
+    expect(snapshot.endpoint.expectedResourceCounts).toEqual({});
+    expect(snapshot.endpoint.resourceCounts).toEqual({});
+  });
+
+  it("stores a full map and exposes it on the snapshot", async () => {
+    const id = await newEndpoint();
+    expect(
+      (await setExpected(id, { expectedResourceCounts: { Encounter: 2, Patient: 1 } })).status,
+    ).toBe(200);
+
+    const snapshot: EndpointSnapshot = await (await poll(id)).json();
+    expect(snapshot.endpoint.expectedResourceCounts).toEqual({ Encounter: 2, Patient: 1 });
+  });
+
+  it("replaces rather than merges", async () => {
+    const id = await newEndpoint();
+    await setExpected(id, { expectedResourceCounts: { Encounter: 2, Patient: 1 } });
+    await setExpected(id, { expectedResourceCounts: { Patient: 3 } });
+
+    const snapshot: EndpointSnapshot = await (await poll(id)).json();
+    expect(snapshot.endpoint.expectedResourceCounts).toEqual({ Patient: 3 });
+  });
+
+  it("clears back to unset with an empty object", async () => {
+    const id = await newEndpoint();
+    await setExpected(id, { expectedResourceCounts: { Encounter: 2 } });
+    await setExpected(id, { expectedResourceCounts: {} });
+
+    const snapshot: EndpointSnapshot = await (await poll(id)).json();
+    expect(snapshot.endpoint.expectedResourceCounts).toEqual({});
+  });
+
+  it("rejects a non-object body", async () => {
+    expect((await setExpected(await newEndpoint(), { expectedResourceCounts: [] })).status).toBe(
+      400,
+    );
+    expect(
+      (await setExpected(await newEndpoint(), { expectedResourceCounts: "Encounter" })).status,
+    ).toBe(400);
+  });
+
+  it("rejects a lower-case or otherwise malformed type name", async () => {
+    const id = await newEndpoint();
+    expect(
+      (await setExpected(id, { expectedResourceCounts: { encounter: 1 } })).status,
+    ).toBe(400);
+  });
+
+  it("rejects a negative or non-integer count", async () => {
+    const id = await newEndpoint();
+    expect((await setExpected(id, { expectedResourceCounts: { Encounter: -1 } })).status).toBe(400);
+    expect((await setExpected(id, { expectedResourceCounts: { Encounter: 1.5 } })).status).toBe(400);
+    expect((await setExpected(id, { expectedResourceCounts: { Encounter: "2" } })).status).toBe(400);
+  });
+
+  it("rejects more than the maximum number of types", async () => {
+    const id = await newEndpoint();
+    const many = Object.fromEntries(Array.from({ length: 26 }, (_, i) => [`Type${i}`, 1]));
+    expect((await setExpected(id, { expectedResourceCounts: many })).status).toBe(400);
+  });
+
+  it("404s for an unknown endpoint", async () => {
+    expect((await setExpected("does-not-exist", { expectedResourceCounts: {} })).status).toBe(404);
+  });
+
+  it("bumps the version so an open dashboard notices", async () => {
+    const id = await newEndpoint();
+    const before: MessagesResponse = await (await poll(id)).json();
+
+    await setExpected(id, { expectedResourceCounts: { Encounter: 1 } });
+
+    const after: MessagesResponse = await (await poll(id, before.version)).json();
+    expect(after.changed).toBe(true);
+  });
+
+  it("tallies arrivals against the configured expectation end to end", async () => {
+    const id = await newEndpoint();
+    await setExpected(id, { expectedResourceCounts: { Encounter: 2 } });
+    await send(id, ENCOUNTER_EVENT);
+    await send(id, ENCOUNTER_EVENT);
+
+    const snapshot: EndpointSnapshot = await (await poll(id)).json();
+    expect(snapshot.endpoint.resourceCounts.Encounter).toBe(2);
+    // Setting the expectation never re-grades or clears what already arrived.
+    await setExpected(id, { expectedResourceCounts: {} });
+    const after: EndpointSnapshot = await (await poll(id)).json();
+    expect(after.endpoint.resourceCounts.Encounter).toBe(2);
   });
 });
 
