@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { capabilityStatementResponse } from "@/lib/capabilityStatement";
 import { checkExpectedEnd, isAfterExpectedEnd } from "@/lib/expiry";
 import { captureHeaders } from "@/lib/headers";
 import { mustOmitBody, overrideFor } from "@/lib/responseRules";
@@ -12,19 +13,68 @@ export const dynamic = "force-dynamic";
 /** Bodies above this are rejected without being stored, to bound memory. */
 const MAX_BODY_BYTES = 1_000_000;
 
+type Params = { params: Promise<{ endpointId: string; path?: string[] }> };
+
 /**
- * POST /hook/:endpointId — the webhook a FHIR Subscription posts to.
+ * POST /hook/:endpointId[/...path] — the webhook a FHIR Subscription posts to.
  *
+ * An optional catch-all rather than a single segment: a plain single-segment
+ * route 404s at the Next.js routing layer for anything longer, which is what
+ * broke the `.../metadata` reachability probe this file also answers (see
+ * `lib/capabilityStatement.ts`). Any subpath is captured exactly like the
+ * base URL — a client hitting an unexpected tail is exactly the kind of thing
+ * this tool exists to surface, not something to 404 on.
+ */
+export async function POST(request: Request, { params }: Params) {
+  const { endpointId, path } = await params;
+  return capture(request, endpointId, path);
+}
+
+/**
+ * GET /hook/:endpointId[/...path].
+ *
+ * Three cases:
+ *  - `.../metadata` answers a reachability probe with a capability statement
+ *    rather than being captured — it is Notifyr's own plumbing answering a
+ *    client library, not something the user is testing.
+ *  - No subpath at all is almost always someone pasting the URL into a
+ *    browser, so it gets a reminder rather than being captured, as before.
+ *  - Any other subpath is captured like a POST would be.
+ */
+export async function GET(request: Request, { params }: Params) {
+  const { endpointId, path } = await params;
+
+  if (path?.length === 1 && path[0] === "metadata") {
+    const endpoint = await store.getEndpoint(endpointId);
+    if (!endpoint) {
+      return NextResponse.json({ error: "Unknown endpoint" }, { status: 404 });
+    }
+    return capabilityStatementResponse();
+  }
+
+  if (!path || path.length === 0) {
+    return NextResponse.json(
+      {
+        error: "This endpoint accepts POST only.",
+        dashboard: `/dashboard/${endpointId}`,
+      },
+      { status: 405, headers: { Allow: "POST" } },
+    );
+  }
+
+  return capture(request, endpointId, path);
+}
+
+/**
  * Always reads the body as text first: an unparseable payload is exactly the
  * case we want to capture and show, so parsing must not be what decides
  * whether we record it.
  */
-export async function POST(
+async function capture(
   request: Request,
-  { params }: { params: Promise<{ endpointId: string }> },
-) {
-  const { endpointId } = await params;
-
+  endpointId: string,
+  path: string[] | undefined,
+): Promise<Response> {
   const endpoint = await store.getEndpoint(endpointId);
   if (!endpoint) {
     return NextResponse.json({ error: "Unknown endpoint" }, { status: 404 });
@@ -85,6 +135,7 @@ export async function POST(
     eventsSinceSubscriptionStart: result.eventsSinceSubscriptionStart,
     topic: result.topic,
     focusResourceTypes: result.focusResourceTypes,
+    requestPath: path && path.length > 0 ? path.join("/") : null,
     headers: captureHeaders(request),
     rawBody,
     validationErrors: [...result.validationErrors, ...continuityFindings, ...expiryFindings],
@@ -103,20 +154,5 @@ export async function POST(
       ...(override !== null && { statusOverridden: true }),
     },
     { status },
-  );
-}
-
-/** A GET here is almost always someone pasting the URL into a browser. */
-export async function GET(
-  _request: Request,
-  { params }: { params: Promise<{ endpointId: string }> },
-) {
-  const { endpointId } = await params;
-  return NextResponse.json(
-    {
-      error: "This endpoint accepts POST only.",
-      dashboard: `/dashboard/${endpointId}`,
-    },
-    { status: 405, headers: { Allow: "POST" } },
   );
 }

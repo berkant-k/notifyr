@@ -292,6 +292,14 @@ export interface Message {
    * `afterEndCount` increments from, so it must travel with the message.
    */
   afterExpectedEnd: boolean;
+  /**
+   * The path segments after the endpoint id, joined with `/`, e.g. `"metadata"`
+   * for a request to `.../metadata`. Null for the base webhook URL. A client
+   * probing an unexpected path is exactly the kind of thing this tool exists
+   * to surface, so it travels with the message rather than being silently
+   * indistinguishable from a base-URL request.
+   */
+  requestPath: string | null;
   /** Request headers, alphabetical, stored verbatim. */
   headers: MessageHeader[];
   /** Request body exactly as received. Never re-serialised — an invalid body must stay inspectable. */

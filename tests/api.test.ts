@@ -11,7 +11,7 @@ import { PUT as putPayloadContent } from "@/app/api/endpoints/[endpointId]/paylo
 import { PUT as putResourceCounts } from "@/app/api/endpoints/[endpointId]/resource-counts/route";
 import { PUT as putRules } from "@/app/api/endpoints/[endpointId]/response-rules/route";
 import { POST as createEndpoint } from "@/app/api/endpoints/route";
-import { GET as hookGet, POST as hookPost } from "@/app/hook/[endpointId]/route";
+import { GET as hookGet, POST as hookPost } from "@/app/hook/[endpointId]/[[...path]]/route";
 import {
   MAX_RECENT_MESSAGES,
   type CreateEndpointResponse,
@@ -24,6 +24,11 @@ const FHIR_JSON = "application/fhir+json";
 
 function params(endpointId: string) {
   return { params: Promise.resolve({ endpointId }) };
+}
+
+/** Like `params`, but for the hook route's optional catch-all subpath. */
+function hookParams(endpointId: string, path?: string[]) {
+  return { params: Promise.resolve({ endpointId, path }) };
 }
 
 /** POST /api/endpoints, optionally requesting a specific id. */
@@ -256,6 +261,88 @@ describe("POST /hook/:endpointId", () => {
     expect(response.status).toBe(405);
     expect(response.headers.get("Allow")).toBe("POST");
     await expect(response.json()).resolves.toMatchObject({ dashboard: `/dashboard/${id}` });
+  });
+
+  it("leaves requestPath null for the base webhook URL", async () => {
+    const id = await newEndpoint();
+    await send(id, '{"resourceType":"Patient","id":"a"}');
+
+    const snapshot: EndpointSnapshot = await (await poll(id)).json();
+    expect(snapshot.messages[0].requestPath).toBeNull();
+  });
+});
+
+describe("GET /hook/:endpointId/metadata", () => {
+  // The one request HAPI FHIR's optional SubscriptionRulesInterceptor makes
+  // before it will accept a rest-hook Subscription — see docs/DESIGN.md.
+  it("answers with a parseable CapabilityStatement", async () => {
+    const id = await newEndpoint();
+    const response = await hookGet(
+      new Request(`${ORIGIN}/hook/${id}/metadata`),
+      hookParams(id, ["metadata"]),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("application/fhir+json");
+
+    const body = await response.json();
+    expect(body.resourceType).toBe("CapabilityStatement");
+    expect(body.status).toBe("active");
+    expect(body.fhirVersion).toBe("4.0.1");
+    expect(body.rest[0].mode).toBe("server");
+  });
+
+  it("does not store the probe as a message", async () => {
+    const id = await newEndpoint();
+    await hookGet(new Request(`${ORIGIN}/hook/${id}/metadata`), hookParams(id, ["metadata"]));
+
+    const snapshot: EndpointSnapshot = await (await poll(id)).json();
+    expect(snapshot.messages).toEqual([]);
+    expect(snapshot.endpoint.validCount).toBe(0);
+    expect(snapshot.endpoint.invalidCount).toBe(0);
+  });
+
+  it("404s for an unknown endpoint", async () => {
+    const response = await hookGet(
+      new Request(`${ORIGIN}/hook/does-not-exist/metadata`),
+      hookParams("does-not-exist", ["metadata"]),
+    );
+    expect(response.status).toBe(404);
+  });
+});
+
+describe("unexpected subpaths under /hook/:endpointId", () => {
+  it("captures a POST to an unexpected subpath, with the path attached", async () => {
+    const id = await newEndpoint();
+    await hookPost(
+      new Request(`${ORIGIN}/hook/${id}/foo/bar`, {
+        method: "POST",
+        headers: { "content-type": FHIR_JSON },
+        body: '{"resourceType":"Patient","id":"a"}',
+      }),
+      hookParams(id, ["foo", "bar"]),
+    );
+
+    const snapshot: EndpointSnapshot = await (await poll(id)).json();
+    expect(snapshot.messages[0].requestPath).toBe("foo/bar");
+    expect(snapshot.messages[0].isValid).toBe(true);
+  });
+
+  // Not a browser visit — nobody hand-types a random tail onto a webhook URL —
+  // so unlike a bare GET this is captured rather than answered with a 405.
+  it("captures a GET to an unexpected subpath instead of 405ing", async () => {
+    const id = await newEndpoint();
+    const response = await hookGet(
+      new Request(`${ORIGIN}/hook/${id}/health`),
+      hookParams(id, ["health"]),
+    );
+
+    expect(response.status).toBe(400);
+
+    const snapshot: EndpointSnapshot = await (await poll(id)).json();
+    expect(snapshot.messages[0].requestPath).toBe("health");
+    expect(snapshot.messages[0].isValid).toBe(false);
+    expect(snapshot.messages[0].summary).toBe("Empty body");
   });
 });
 

@@ -17,6 +17,7 @@ function message(overrides: Partial<NewMessage> = {}): NewMessage {
     eventsSinceSubscriptionStart: null,
     topic: null,
     focusResourceTypes: [],
+    requestPath: null,
     statusOverridden: false,
     expectedPayloadContent: null,
     afterExpectedEnd: false,

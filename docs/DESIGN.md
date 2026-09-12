@@ -14,6 +14,7 @@ until you know the constraint.
 - [Expected payload content](#expected-payload-content)
 - [Expected Subscription end](#expected-subscription-end)
 - [Endpoint ids](#endpoint-ids)
+- [The /metadata reachability probe](#the-metadata-reachability-probe)
 - [Request headers](#request-headers)
 - [Project layout](#project-layout)
 - [Dependency notes](#dependency-notes)
@@ -332,6 +333,48 @@ handing back someone else's endpoint would let anyone read a stranger's traffic
 by guessing its name. The `409` body includes `existingDashboard` so the UI can
 offer a link, and viewing an existing dashboard directly still works.
 
+## The /metadata reachability probe
+
+`hook/[endpointId]/route.ts` used to be a single dynamic segment, so a request
+for anything past the endpoint id 404'd at the Next.js routing layer before
+Notifyr's own code ever ran. That broke registering a Subscription against
+`hapi.fhir.org`: its public test server optionally runs
+`SubscriptionRulesInterceptor`, which — once, when a `rest-hook` Subscription
+is created — does `GET {endpointUrl}/metadata` and rejects the Subscription
+outright (`HAPI-2671: REST HOOK endpoint is not reachable`) if that does not
+parse as a `CapabilityStatement`. A 404 HTML page does not, so every
+Subscription pointed at Notifyr failed before a single notification was
+attempted. This is not universal HAPI behaviour — the check is opt-in, and
+`hapi-fhir-jpaserver-starter` does not enable it — but the public test server
+is exactly where someone without their own FHIR server reaches for first.
+
+The fix is `hook/[endpointId]/[[...path]]/route.ts`, an **optional catch-all**:
+the bare webhook URL still matches with no subpath, and anything longer is
+routed rather than 404'd. Three things follow from that:
+
+- **`.../metadata` is answered, not captured.** `lib/capabilityStatement.ts`
+  returns a static, minimal `CapabilityStatement` — `200`,
+  `application/fhir+json`, no message stored, no counter touched. It is
+  Notifyr's own plumbing answering a client library's precondition, not
+  something the user is testing, so it does not appear in the notification
+  list.
+- **The statement is honest about scope.** No `rest[].resource` entries
+  claiming `read` or `search` — Notifyr does not implement the FHIR REST API,
+  and claiming otherwise would be a false conformance statement from a tool
+  whose whole premise is telling the truth about what arrived. A
+  `documentation` string says the real thing instead.
+- **Every other subpath is captured like the base URL**, with the path
+  attached (`Message.requestPath`, shown in the list and the detail view). A
+  client hitting an unexpected tail is not a browser visit — nobody hand-types
+  a random path onto a webhook URL — so unlike a bare `GET` on the base URL
+  (still answered with a reminder rather than stored), an unexpected subpath
+  is exactly the kind of thing this tool exists to surface.
+
+`fhirVersion` in the statement is `4.0.1` rather than R4B or R5: nothing
+observed cross-checks it against the Subscription actually under test, so the
+widest common denominator is the safer default across whatever FHIR version
+context makes the request.
+
 ## Request headers
 
 Headers are stored verbatim, `Authorization` included. Checking that a FHIR
@@ -383,7 +426,7 @@ src/
     globals.css                          Tailwind entry
     api/endpoints/route.ts               POST — create endpoint
     api/endpoints/[endpointId]/messages/route.ts   GET — poll for counters + messages
-    hook/[endpointId]/route.ts           POST — webhook receiver
+    hook/[endpointId]/[[...path]]/route.ts   POST/GET — webhook receiver + /metadata probe
     dashboard/[endpointId]/page.tsx      Dashboard route (server, awaits params)
   components/
     DashboardView.tsx                    Dashboard client shell: layout + state
@@ -411,9 +454,11 @@ src/
     expiry.ts                            Arrivals after the expected Subscription.end
     headers.ts                           Header capture, credential flagging
     store.ts                             MessageStore interface + in-memory impl
+    redisStore.ts                        Shared-store implementation, for deployments with credentials
     validation.ts                        Three-tier validation pipeline
     specs.ts                             Spec URLs cited by validation findings
     subscription.ts                      SubscriptionStatus / notification Bundles
+    capabilityStatement.ts               Static CapabilityStatement for the /metadata probe
     url.ts                               Deriving the public webhook URL
 ```
 
