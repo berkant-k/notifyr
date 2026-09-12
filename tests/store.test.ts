@@ -9,6 +9,7 @@ import { MAX_RECENT_MESSAGES, MAX_STORED_MESSAGES, type NewMessage } from "@/lib
 function message(overrides: Partial<NewMessage> = {}): NewMessage {
   return {
     receivedAt: new Date().toISOString(),
+    method: "POST",
     isValid: true,
     status: 200,
     summary: "Patient/a",

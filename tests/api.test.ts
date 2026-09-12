@@ -254,21 +254,38 @@ describe("POST /hook/:endpointId", () => {
     expect(auth?.sensitive).toBe(true);
   });
 
-  it("answers GET with 405 and a pointer to the dashboard", async () => {
+  it("answers GET with 405 and a pointer to the dashboard, but still captures it", async () => {
     const id = await newEndpoint();
     const response = await hookGet(new Request(`${ORIGIN}/hook/${id}`), params(id));
 
     expect(response.status).toBe(405);
     expect(response.headers.get("Allow")).toBe("POST");
     await expect(response.json()).resolves.toMatchObject({ dashboard: `/dashboard/${id}` });
+
+    // The wire response stays a helpful pointer for whoever pasted the URL
+    // into a browser, but the visit is no longer invisible to the dashboard.
+    // Graded as a warning, not the fatal "empty body" a POST with nothing in
+    // it would get — a GET having no body is the ordinary case, not a failure.
+    const snapshot: EndpointSnapshot = await (await poll(id)).json();
+    expect(snapshot.messages[0].method).toBe("GET");
+    expect(snapshot.messages[0].requestPath).toBeNull();
+    expect(snapshot.messages[0].isValid).toBe(true);
+    expect(snapshot.messages[0].summary).toBe("Unexpected GET request");
+    expect(snapshot.messages[0].validationErrors).toEqual([
+      {
+        severity: "warning",
+        message: "Received an unexpected GET request. Subscription notifications are always POSTed.",
+      },
+    ]);
   });
 
-  it("leaves requestPath null for the base webhook URL", async () => {
+  it("leaves requestPath null and method POST for the base webhook URL", async () => {
     const id = await newEndpoint();
     await send(id, '{"resourceType":"Patient","id":"a"}');
 
     const snapshot: EndpointSnapshot = await (await poll(id)).json();
     expect(snapshot.messages[0].requestPath).toBeNull();
+    expect(snapshot.messages[0].method).toBe("POST");
   });
 });
 
@@ -292,14 +309,23 @@ describe("GET /hook/:endpointId/metadata", () => {
     expect(body.rest[0].mode).toBe("server");
   });
 
-  it("does not store the probe as a message", async () => {
+  it("shows up in the message list as an info-level, valid entry", async () => {
     const id = await newEndpoint();
     await hookGet(new Request(`${ORIGIN}/hook/${id}/metadata`), hookParams(id, ["metadata"]));
 
     const snapshot: EndpointSnapshot = await (await poll(id)).json();
-    expect(snapshot.messages).toEqual([]);
-    expect(snapshot.endpoint.validCount).toBe(0);
-    expect(snapshot.endpoint.invalidCount).toBe(0);
+    const message = snapshot.messages[0];
+    expect(message.method).toBe("GET");
+    expect(message.requestPath).toBe("metadata");
+    expect(message.isValid).toBe(true);
+    expect(message.summary).toBe("Metadata probe");
+    expect(message.validationErrors).toEqual([
+      {
+        severity: "info",
+        message: "Answered a capability statement reachability probe at /metadata.",
+      },
+    ]);
+    expect(snapshot.endpoint.validCount).toBe(1);
   });
 
   it("404s for an unknown endpoint", async () => {
@@ -329,7 +355,9 @@ describe("unexpected subpaths under /hook/:endpointId", () => {
   });
 
   // Not a browser visit — nobody hand-types a random tail onto a webhook URL —
-  // so unlike a bare GET this is captured rather than answered with a 405.
+  // so unlike a bare GET this gets the real validation-driven status on the
+  // wire rather than the "POST only" pointer. Still a GET, though, so it is
+  // graded the same warning way a bare GET is, not as a malformed POST.
   it("captures a GET to an unexpected subpath instead of 405ing", async () => {
     const id = await newEndpoint();
     const response = await hookGet(
@@ -337,12 +365,13 @@ describe("unexpected subpaths under /hook/:endpointId", () => {
       hookParams(id, ["health"]),
     );
 
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(200);
 
     const snapshot: EndpointSnapshot = await (await poll(id)).json();
+    expect(snapshot.messages[0].method).toBe("GET");
     expect(snapshot.messages[0].requestPath).toBe("health");
-    expect(snapshot.messages[0].isValid).toBe(false);
-    expect(snapshot.messages[0].summary).toBe("Empty body");
+    expect(snapshot.messages[0].isValid).toBe(true);
+    expect(snapshot.messages[0].summary).toBe("Unexpected GET request");
   });
 });
 

@@ -182,6 +182,12 @@ export default function MessageDetailModal({ message, onClose }: Props) {
                 {fullTimestamp(message.receivedAt)}
               </time>{" "}
               · HTTP {message.status} · {message.contentType ?? "no content-type"}
+              {message.method !== "POST" && (
+                <>
+                  {" "}
+                  · <span className="font-mono font-semibold text-slate-700">{message.method}</span>
+                </>
+              )}
               {message.requestPath !== null && (
                 <>
                   {" "}

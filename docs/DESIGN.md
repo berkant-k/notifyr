@@ -350,25 +350,37 @@ is exactly where someone without their own FHIR server reaches for first.
 
 The fix is `hook/[endpointId]/[[...path]]/route.ts`, an **optional catch-all**:
 the bare webhook URL still matches with no subpath, and anything longer is
-routed rather than 404'd. Three things follow from that:
+routed rather than 404'd. Every request is captured, `.../metadata` and a
+bare `GET` on the base URL included — showing what actually arrived is the
+point of this tool, and that includes a client that only checks reachability
+or only ever GETs. What changes per case is grading and what goes back on the
+wire, not whether it is recorded:
 
-- **`.../metadata` is answered, not captured.** `lib/capabilityStatement.ts`
+- **`.../metadata` still gets the capability statement.** `lib/capabilityStatement.ts`
   returns a static, minimal `CapabilityStatement` — `200`,
-  `application/fhir+json`, no message stored, no counter touched. It is
-  Notifyr's own plumbing answering a client library's precondition, not
-  something the user is testing, so it does not appear in the notification
-  list.
+  `application/fhir+json` — regardless of what `capture()` itself would have
+  answered, unless the endpoint does not exist, in which case that `404` goes
+  back instead. The message is recorded with an `info`-level finding
+  (`metadataProbeResult` in `lib/validation.ts`), not a warning: unlike an
+  arbitrary GET this one is an expected, ordinary part of some clients'
+  Subscription setup.
 - **The statement is honest about scope.** No `rest[].resource` entries
   claiming `read` or `search` — Notifyr does not implement the FHIR REST API,
   and claiming otherwise would be a false conformance statement from a tool
   whose whole premise is telling the truth about what arrived. A
   `documentation` string says the real thing instead.
-- **Every other subpath is captured like the base URL**, with the path
-  attached (`Message.requestPath`, shown in the list and the detail view). A
-  client hitting an unexpected tail is not a browser visit — nobody hand-types
-  a random path onto a webhook URL — so unlike a bare `GET` on the base URL
-  (still answered with a reminder rather than stored), an unexpected subpath
-  is exactly the kind of thing this tool exists to surface.
+- **Any other GET is graded as an unexpected-but-harmless visit, not a
+  malformed POST.** A Subscription notification is always POSTed, so a GET's
+  usually-absent body is never run through `validateBody` — that would report
+  the ordinary case, nothing to send, as a fatal "Request body was empty."
+  `unexpectedGetResult` in `lib/validation.ts` grades it `isValid: true` with
+  a `warning` finding instead. This covers a bare GET on the base URL and an
+  unexpected subpath alike, with the path attached where there is one
+  (`Message.requestPath`, shown in the list and the detail view). A bare GET
+  still gets the "POST only" pointer to the dashboard on the wire — that is
+  almost always someone pasting the URL into a browser, and still the most
+  useful thing to tell them — but the visit is no longer invisible to the
+  message list.
 
 `fhirVersion` in the statement is `4.0.1` rather than R4B or R5: nothing
 observed cross-checks it against the Subscription actually under test, so the

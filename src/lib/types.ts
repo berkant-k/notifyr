@@ -242,12 +242,19 @@ export interface ValidationError {
   spec?: string;
 }
 
-/** One notification POSTed to a webhook endpoint. */
+/**
+ * One request captured at a webhook endpoint. Almost always a POST carrying a
+ * FHIR notification, but a GET is captured too rather than only answered —
+ * a client checking the endpoint is exactly the kind of thing this tool
+ * exists to surface, not something to hide by not recording it.
+ */
 export interface Message {
   id: string;
   endpointId: string;
   /** ISO 8601, always UTC. */
   receivedAt: string;
+  /** The HTTP method of the captured request. Almost always "POST". */
+  method: string;
   isValid: boolean;
   /** HTTP status Notifyr responded with. */
   status: number;

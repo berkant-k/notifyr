@@ -5,7 +5,7 @@ import { captureHeaders } from "@/lib/headers";
 import { mustOmitBody, overrideFor } from "@/lib/responseRules";
 import { store } from "@/lib/store";
 import { isOverridable } from "@/lib/types";
-import { validateBody } from "@/lib/validation";
+import { metadataProbeResult, unexpectedGetResult, validateBody } from "@/lib/validation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,23 +33,24 @@ export async function POST(request: Request, { params }: Params) {
 /**
  * GET /hook/:endpointId[/...path].
  *
- * Three cases:
- *  - `.../metadata` answers a reachability probe with a capability statement
- *    rather than being captured — it is Notifyr's own plumbing answering a
- *    client library, not something the user is testing.
- *  - No subpath at all is almost always someone pasting the URL into a
- *    browser, so it gets a reminder rather than being captured, as before.
- *  - Any other subpath is captured like a POST would be.
+ * Every GET is captured, `.../metadata` included — showing what actually
+ * arrived is the point of this tool, and a reachability check is worth
+ * seeing happen, not just worth answering correctly. Two things change what
+ * goes back on the wire rather than whether the request is recorded:
+ *  - `.../metadata` still gets the capability statement `capture()` itself
+ *    would not produce (see `lib/capabilityStatement.ts`), unless the
+ *    endpoint does not exist, in which case that 404 is what should go back.
+ *  - A bare GET on the base URL still gets the "POST only" pointer to the
+ *    dashboard, since that is almost always someone pasting the URL into a
+ *    browser and still the most useful thing to tell them.
  */
 export async function GET(request: Request, { params }: Params) {
   const { endpointId, path } = await params;
 
+  const captured = await capture(request, endpointId, path);
+
   if (path?.length === 1 && path[0] === "metadata") {
-    const endpoint = await store.getEndpoint(endpointId);
-    if (!endpoint) {
-      return NextResponse.json({ error: "Unknown endpoint" }, { status: 404 });
-    }
-    return capabilityStatementResponse();
+    return captured.status === 404 ? captured : capabilityStatementResponse();
   }
 
   if (!path || path.length === 0) {
@@ -62,7 +63,7 @@ export async function GET(request: Request, { params }: Params) {
     );
   }
 
-  return capture(request, endpointId, path);
+  return captured;
 }
 
 /**
@@ -89,9 +90,19 @@ async function capture(
   // previous heartbeat, so the value it measures must be the value stored.
   const receivedAt = new Date().toISOString();
   const contentType = request.headers.get("content-type");
-  // The expectation is read at receive time and recorded on the message below:
-  // changing it later cannot re-grade what has already arrived.
-  const result = validateBody(rawBody, contentType, endpoint.expectedPayloadContent);
+  // A GET is never a Subscription notification — that is always POSTed — so
+  // its (usually absent) body is not graded through the same tiers a POST is.
+  // `.../metadata` gets its own result rather than the generic "unexpected"
+  // one: unlike an arbitrary GET, this one is an ordinary, expected part of
+  // some clients' Subscription setup. The expectation is read at receive time
+  // and recorded on the message below: changing it later cannot re-grade what
+  // has already arrived.
+  const isMetadataProbe = request.method === "GET" && path?.length === 1 && path[0] === "metadata";
+  const result = isMetadataProbe
+    ? metadataProbeResult()
+    : request.method === "GET"
+      ? unexpectedGetResult()
+      : validateBody(rawBody, contentType, endpoint.expectedPayloadContent);
 
   // Arrival against Subscription.end. Read at receive time like the payload
   // expectation, and applied to every message rather than only valid ones: this
@@ -123,6 +134,7 @@ async function capture(
 
   await store.addMessage(endpointId, {
     receivedAt,
+    method: request.method,
     isValid: result.isValid,
     status,
     statusOverridden: override !== null,
