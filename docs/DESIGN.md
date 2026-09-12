@@ -388,14 +388,13 @@ src/
   components/
     DashboardView.tsx                    Dashboard client shell: layout + state
     LiveIndicator.tsx                    Connection status dot
-    EndpointCard.tsx                     Webhook URL + copy
+    EndpointCard.tsx                     Webhook URL, copy, lifetime, live status, refresh
     MessageList.tsx                      Recent notifications, newest first
     MessageDetailModal.tsx               Raw body, headers, validation results
     NotificationCounters.tsx             Per-type notification tallies
     ResponseRulesCard.tsx                Per-type response override switches
-    PayloadExpectationCard.tsx           Expected payload level select
-    HeartbeatPeriodCard.tsx              Expected heartbeat period input
-    SubscriptionEndCard.tsx              Expected Subscription.end input
+    ExpectationsCard.tsx                 Expected payload level, heartbeat period, Subscription.end
+    ExpectedResourceCountsCard.tsx       Expected notification counts per FHIR resource type
     CodeBlock.tsx                        Dark code block with a copy button
     FhirCandleGuide.tsx                  End-to-end walkthrough, shown in-app
     ValidationExplainer.tsx              How the validation tiers work

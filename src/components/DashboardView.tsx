@@ -3,15 +3,12 @@
 import Link from "next/link";
 import { useState } from "react";
 import EndpointCard from "@/components/EndpointCard";
+import ExpectationsCard from "@/components/ExpectationsCard";
 import ExpectedResourceCountsCard from "@/components/ExpectedResourceCountsCard";
-import HeartbeatPeriodCard from "@/components/HeartbeatPeriodCard";
-import LiveIndicator from "@/components/LiveIndicator";
 import MessageDetailModal from "@/components/MessageDetailModal";
 import MessageList from "@/components/MessageList";
 import NotificationCounters from "@/components/NotificationCounters";
-import PayloadExpectationCard from "@/components/PayloadExpectationCard";
 import ResponseRulesCard from "@/components/ResponseRulesCard";
-import SubscriptionEndCard from "@/components/SubscriptionEndCard";
 import { useEndpointPoll } from "@/hooks/useEndpointPoll";
 import {
   emptyNotificationCounts,
@@ -106,22 +103,23 @@ export default function DashboardView({
       and the filters can all change height without anyone re-deriving anything.
     */
     <div className="space-y-4 lg:flex lg:h-[calc(100vh-182px)] lg:flex-col">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Endpoint dashboard</h1>
-          <p className="mt-1 font-mono text-xs text-slate-500">{endpointId}</p>
-        </div>
-        <div className="flex shrink-0 items-center gap-3">
-          <LiveIndicator state={state} />
-          <button
-            type="button"
-            onClick={refresh}
-            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-          >
-            Refresh
-          </button>
-        </div>
-      </div>
+      {/*
+        Visually hidden rather than deleted: the page still needs exactly one
+        h1 for screen-reader navigation, but the visible label was redundant
+        once the URL card below states the endpoint id, and the site header
+        already says which app this is.
+      */}
+      <h1 className="sr-only">Endpoint dashboard</h1>
+
+      <EndpointCard
+        webhookUrl={webhookUrl}
+        guideHref={`/dashboard/${endpointId}/guide`}
+        createdAt={snapshot?.endpoint.createdAt ?? null}
+        expiresAt={snapshot?.endpoint.expiresAt ?? null}
+        nowMs={nowMs}
+        state={state}
+        onRefresh={refresh}
+      />
 
       {/*
         Two columns from `lg`. The notification stream is why this page exists,
@@ -225,14 +223,6 @@ export default function DashboardView({
         </div>
 
         <aside className="space-y-4 lg:h-full lg:w-80 lg:shrink-0 lg:overflow-y-auto">
-          <EndpointCard
-            webhookUrl={webhookUrl}
-            guideHref={`/dashboard/${endpointId}/guide`}
-            createdAt={snapshot?.endpoint.createdAt ?? null}
-            expiresAt={snapshot?.endpoint.expiresAt ?? null}
-            nowMs={nowMs}
-          />
-
           {snapshot && (
             <ResponseRulesCard
               endpointId={endpointId}
@@ -241,32 +231,21 @@ export default function DashboardView({
             />
           )}
 
-          {snapshot && (
-            <PayloadExpectationCard
-              endpointId={endpointId}
-              expected={snapshot.endpoint.expectedPayloadContent}
-              onChanged={refresh}
-            />
-          )}
-
-          {snapshot && (
-            <HeartbeatPeriodCard
-              endpointId={endpointId}
-              key={`heartbeat-${snapshot.endpoint.heartbeatPeriodSeconds}`}
-              seconds={snapshot.endpoint.heartbeatPeriodSeconds}
-              onChanged={refresh}
-            />
-          )}
-
           {/*
-            Keyed on the stored deadline for the same reason as the heartbeat
-            card: the field holds local state while typing, so a change made in
-            another tab has to remount it to be picked up.
+            Keyed on the two fields that hold local text state (heartbeat
+            period, subscription end) for the same reason each used to be
+            keyed on its own: a change made in another tab has to remount the
+            field to be picked up. The payload level holds no local state, so
+            remounting it along with the rest is free.
           */}
           {snapshot && (
-            <SubscriptionEndCard
+            <ExpectationsCard
               endpointId={endpointId}
-              key={`expected-end-${snapshot.endpoint.expectedEnd ?? "unset"}`}
+              key={`expectations-${snapshot.endpoint.heartbeatPeriodSeconds}-${
+                snapshot.endpoint.expectedEnd ?? "unset"
+              }`}
+              expectedPayloadContent={snapshot.endpoint.expectedPayloadContent}
+              heartbeatPeriodSeconds={snapshot.endpoint.heartbeatPeriodSeconds}
               expectedEnd={snapshot.endpoint.expectedEnd}
               afterEndCount={snapshot.endpoint.afterEndCount}
               onChanged={refresh}
