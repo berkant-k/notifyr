@@ -245,6 +245,13 @@ genuine notifications arrive. The same walkthrough is built into the app, on the
 home page and on any empty dashboard, where the sample below is pre-filled with
 that endpoint's own URL.
 
+No interest in running anything locally? [subscriptions.argo.run](https://subscriptions.argo.run/)
+hosts the same fhir-candle software, with `SubscriptionTopic/encounter-complete`
+already loaded at `/fhir/r4b` — skip straight to step 2 below with that base URL.
+It's shared, third-party infrastructure Notifyr doesn't control, so treat the
+local walkthrough as the one that's always reproducible and gives you server-side
+logs when something doesn't arrive.
+
 **1. Start fhir-candle:**
 
 ```bash

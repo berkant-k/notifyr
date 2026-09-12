@@ -109,6 +109,24 @@ export default function FhirCandleGuide({ webhookUrl }: { webhookUrl?: string })
         implementation, which makes it the quickest way to see real notifications land here.
       </p>
 
+      <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
+        No interest in running anything locally?{" "}
+        <a
+          href="https://subscriptions.argo.run/"
+          target="_blank"
+          rel="noreferrer"
+          className="font-medium text-slate-900 underline"
+        >
+          subscriptions.argo.run
+        </a>{" "}
+        hosts the same fhir-candle software, with{" "}
+        <code className="font-mono">SubscriptionTopic/encounter-complete</code> already loaded
+        at <code className="font-mono">/fhir/r4b</code> — skip straight to step 2 below with
+        that base URL. It&apos;s shared, third-party infrastructure Notifyr doesn&apos;t
+        control, so the local walkthrough is the one that&apos;s always reproducible and gives
+        you server-side logs when something doesn&apos;t arrive.
+      </p>
+
       {/*
         On the landing page there is no endpoint yet, so step 2 asks for a URL
         the reader does not have and the sample carries a placeholder. Say so,
