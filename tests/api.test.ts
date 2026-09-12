@@ -296,7 +296,7 @@ describe("POST /hook/:endpointId", () => {
   // Firely Server, among others, delivers rest-hook notifications via PUT
   // rather than POST — graded identically, since a PUT body is exactly as
   // much a notification attempt as a POST body.
-  it("captures a PUT exactly like a POST", async () => {
+  it("captures a PUT like a POST, but warns that PUT isn't the spec's delivery method", async () => {
     const id = await newEndpoint();
     const response = await hookPut(
       new Request(`${ORIGIN}/hook/${id}`, {
@@ -310,9 +310,24 @@ describe("POST /hook/:endpointId", () => {
     expect(response.status).toBe(200);
 
     const snapshot: EndpointSnapshot = await (await poll(id)).json();
-    expect(snapshot.messages[0].method).toBe("PUT");
-    expect(snapshot.messages[0].isValid).toBe(true);
-    expect(snapshot.messages[0].summary).toBe("Patient/a");
+    const message = snapshot.messages[0];
+    expect(message.method).toBe("PUT");
+    // A warning, not an error: the body is still graded and counted normally.
+    expect(message.isValid).toBe(true);
+    expect(message.summary).toBe("Patient/a");
+    expect(
+      message.validationErrors.some(
+        (issue) => issue.severity === "warning" && issue.message.includes("Received via PUT"),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not warn about method on an ordinary POST", async () => {
+    const id = await newEndpoint();
+    await send(id, '{"resourceType":"Patient","id":"a"}');
+
+    const snapshot: EndpointSnapshot = await (await poll(id)).json();
+    expect(snapshot.messages[0].validationErrors).toEqual([]);
   });
 });
 

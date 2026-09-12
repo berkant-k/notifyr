@@ -3,8 +3,9 @@ import { capabilityStatementResponse } from "@/lib/capabilityStatement";
 import { checkExpectedEnd, isAfterExpectedEnd } from "@/lib/expiry";
 import { captureHeaders } from "@/lib/headers";
 import { mustOmitBody, overrideFor } from "@/lib/responseRules";
+import { SPECS } from "@/lib/specs";
 import { store } from "@/lib/store";
-import { isOverridable } from "@/lib/types";
+import { isOverridable, type ValidationError } from "@/lib/types";
 import { metadataProbeResult, unexpectedGetResult, validateBody } from "@/lib/validation";
 
 export const runtime = "nodejs";
@@ -35,9 +36,10 @@ export async function POST(request: Request, { params }: Params) {
  *
  * The spec's own rest-hook delivery is POST, but not every server sends it
  * that way — Firely Server, for one, PUTs rest-hook notifications by default.
- * Graded identically to a POST: a PUT body is exactly as much a notification
- * attempt as a POST body, and there is no reason this tool should only work
- * with senders that picked one particular verb.
+ * The body is captured and validated exactly like a POST — there is no
+ * reason this tool should only work with senders that picked one particular
+ * verb — but a warning finding is added alongside it (see `capture()` below),
+ * since the sender is still doing something the spec does not describe.
  */
 export async function PUT(request: Request, { params }: Params) {
   const { endpointId, path } = await params;
@@ -125,6 +127,22 @@ async function capture(
   const afterExpectedEnd = isAfterExpectedEnd(endpoint.expectedEnd, receivedAt);
   const expiryFindings = checkExpectedEnd(endpoint.expectedEnd, receivedAt);
 
+  // The rest-hook channel's own delivery mechanism is POST. A PUT still
+  // carries a real notification body — graded normally above — but the
+  // sender isn't doing what the spec describes, so that's worth a warning
+  // alongside whatever the body itself turns out to be.
+  const methodFindings: ValidationError[] =
+    request.method === "PUT"
+      ? [
+          {
+            severity: "warning",
+            message:
+              "Received via PUT. The rest-hook channel delivers notifications via POST; some servers (e.g. Firely Server) send PUT instead.",
+            spec: SPECS.subscription,
+          },
+        ]
+      : [];
+
   // Continuity is the one check that needs more than this request: a gap is
   // only visible against what came before. Recorded before the message is
   // stored, so its findings travel with the notification that revealed them.
@@ -164,7 +182,12 @@ async function capture(
     requestPath: path && path.length > 0 ? path.join("/") : null,
     headers: captureHeaders(request),
     rawBody,
-    validationErrors: [...result.validationErrors, ...continuityFindings, ...expiryFindings],
+    validationErrors: [
+      ...result.validationErrors,
+      ...continuityFindings,
+      ...expiryFindings,
+      ...methodFindings,
+    ],
   });
 
   // 204, 205 and 304 must carry no body at all; NextResponse.json would throw.
