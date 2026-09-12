@@ -26,12 +26,14 @@ const fhir = new Fhir();
 
 /**
  * What a GET arriving at the webhook is graded as, instead of running it
- * through `validateBody`. A Subscription notification is always POSTed, so a
- * GET can never carry one — grading its (usually absent) body through the
- * same tiers as a POST would report the ordinary case, a client with no body
- * to send, as a fatal "Request body was empty." That is not a failure, so
- * this is a warning rather than an error: a client checking the endpoint is
- * unexpected but harmless, not something to invalidate.
+ * through `validateBody`. A Subscription notification always carries a body
+ * — sent as a POST per the spec, or as a PUT by servers like Firely Server
+ * that deliver rest-hook that way instead — so a GET can never carry one.
+ * Grading its (usually absent) body through the same tiers a POST or PUT
+ * gets would report the ordinary case, a client with no body to send, as a
+ * fatal "Request body was empty." That is not a failure, so this is a
+ * warning rather than an error: a client checking the endpoint is unexpected
+ * but harmless, not something to invalidate.
  */
 export function unexpectedGetResult(): ValidationResult {
   return {
@@ -40,7 +42,7 @@ export function unexpectedGetResult(): ValidationResult {
       {
         severity: "warning",
         message:
-          "Received an unexpected GET request. Subscription notifications are always POSTed.",
+          "Received an unexpected GET request. Subscription notifications are always sent with a body (POST or PUT).",
       },
     ],
     status: 200,
