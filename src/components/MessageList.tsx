@@ -176,7 +176,28 @@ export default function MessageList({ messages, nowMs, onSelect }: Props) {
                 {message.statusOverridden && "*"}
               </span>
               <span className={`${COLUMNS.summary} min-w-0`}>
-                <span className="block truncate text-sm text-slate-800">{message.summary}</span>
+                <span className="flex min-w-0 items-center gap-1.5">
+                  {/*
+                    Both badges below share the same reasoning: almost every
+                    arrival is a POST to the base URL, so a column would sit
+                    empty for nearly every row. Shown only when there is
+                    something to say, not lined up.
+                  */}
+                  {message.method !== "POST" && (
+                    <span className="shrink-0 rounded bg-slate-200 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-slate-700">
+                      {message.method}
+                    </span>
+                  )}
+                  {message.requestPath !== null && (
+                    <code
+                      className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-600"
+                      title={`Arrived at /${message.requestPath}, not the base webhook URL`}
+                    >
+                      /{message.requestPath}
+                    </code>
+                  )}
+                  <span className="truncate text-sm text-slate-800">{message.summary}</span>
+                </span>
                 {/*
                   Below `md` the Events and Topic columns are dropped for width,
                   which took the most FHIR-specific values on the row with them.

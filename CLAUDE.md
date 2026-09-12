@@ -36,7 +36,7 @@ a new file.
 Notifyr is a Next.js 16 App Router app: a disposable webhook that receives FHIR
 `Subscription` `rest-hook` notifications, validates them, and shows them live.
 
-Request flow: a FHIR server POSTs to `src/app/hook/[endpointId]/route.ts` →
+Request flow: a FHIR server POSTs to `src/app/hook/[endpointId]/[[...path]]/route.ts` →
 `lib/validation.ts` (which delegates notification Bundles to `lib/subscription.ts`)
 → `lib/responseRules.ts` decides the wire status → `lib/store.ts` records the
 message and bumps `endpoint.version` → the dashboard's poll

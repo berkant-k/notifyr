@@ -24,6 +24,61 @@ import type { NotificationType, PayloadContent, ValidationError } from "@/lib/ty
 /** Constructing this parses the R4 conformance set (~25ms), so do it once per instance. */
 const fhir = new Fhir();
 
+/**
+ * What a GET arriving at the webhook is graded as, instead of running it
+ * through `validateBody`. A Subscription notification is always POSTed, so a
+ * GET can never carry one — grading its (usually absent) body through the
+ * same tiers as a POST would report the ordinary case, a client with no body
+ * to send, as a fatal "Request body was empty." That is not a failure, so
+ * this is a warning rather than an error: a client checking the endpoint is
+ * unexpected but harmless, not something to invalidate.
+ */
+export function unexpectedGetResult(): ValidationResult {
+  return {
+    isValid: true,
+    validationErrors: [
+      {
+        severity: "warning",
+        message:
+          "Received an unexpected GET request. Subscription notifications are always POSTed.",
+      },
+    ],
+    status: 200,
+    summary: "Unexpected GET request",
+    notificationType: null,
+    eventsSinceSubscriptionStart: null,
+    topic: null,
+    subscriptionReference: null,
+    focusResourceTypes: [],
+  };
+}
+
+/**
+ * What a `GET .../metadata` reachability probe is graded as. Distinct from
+ * `unexpectedGetResult`: this GET is not unexpected, it is a normal part of
+ * some clients' Subscription setup (HAPI FHIR's `SubscriptionRulesInterceptor`
+ * is the motivating case — see `lib/capabilityStatement.ts`), so it is `info`
+ * rather than `warning` — worth a record, not a concern.
+ */
+export function metadataProbeResult(): ValidationResult {
+  return {
+    isValid: true,
+    validationErrors: [
+      {
+        severity: "info",
+        message: "Answered a capability statement reachability probe at /metadata.",
+      },
+    ],
+    status: 200,
+    summary: "Metadata probe",
+    notificationType: null,
+    eventsSinceSubscriptionStart: null,
+    topic: null,
+    subscriptionReference: null,
+    focusResourceTypes: [],
+  };
+}
+
 export interface ValidationResult {
   isValid: boolean;
   validationErrors: ValidationError[];

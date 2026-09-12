@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
+import { capabilityStatementResponse } from "@/lib/capabilityStatement";
 import { checkExpectedEnd, isAfterExpectedEnd } from "@/lib/expiry";
 import { captureHeaders } from "@/lib/headers";
 import { mustOmitBody, overrideFor } from "@/lib/responseRules";
 import { store } from "@/lib/store";
 import { isOverridable } from "@/lib/types";
-import { validateBody } from "@/lib/validation";
+import { metadataProbeResult, unexpectedGetResult, validateBody } from "@/lib/validation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,19 +13,69 @@ export const dynamic = "force-dynamic";
 /** Bodies above this are rejected without being stored, to bound memory. */
 const MAX_BODY_BYTES = 1_000_000;
 
+type Params = { params: Promise<{ endpointId: string; path?: string[] }> };
+
 /**
- * POST /hook/:endpointId — the webhook a FHIR Subscription posts to.
+ * POST /hook/:endpointId[/...path] — the webhook a FHIR Subscription posts to.
  *
+ * An optional catch-all rather than a single segment: a plain single-segment
+ * route 404s at the Next.js routing layer for anything longer, which is what
+ * broke the `.../metadata` reachability probe this file also answers (see
+ * `lib/capabilityStatement.ts`). Any subpath is captured exactly like the
+ * base URL — a client hitting an unexpected tail is exactly the kind of thing
+ * this tool exists to surface, not something to 404 on.
+ */
+export async function POST(request: Request, { params }: Params) {
+  const { endpointId, path } = await params;
+  return capture(request, endpointId, path);
+}
+
+/**
+ * GET /hook/:endpointId[/...path].
+ *
+ * Every GET is captured, `.../metadata` included — showing what actually
+ * arrived is the point of this tool, and a reachability check is worth
+ * seeing happen, not just worth answering correctly. Two things change what
+ * goes back on the wire rather than whether the request is recorded:
+ *  - `.../metadata` still gets the capability statement `capture()` itself
+ *    would not produce (see `lib/capabilityStatement.ts`), unless the
+ *    endpoint does not exist, in which case that 404 is what should go back.
+ *  - A bare GET on the base URL still gets the "POST only" pointer to the
+ *    dashboard, since that is almost always someone pasting the URL into a
+ *    browser and still the most useful thing to tell them.
+ */
+export async function GET(request: Request, { params }: Params) {
+  const { endpointId, path } = await params;
+
+  const captured = await capture(request, endpointId, path);
+
+  if (path?.length === 1 && path[0] === "metadata") {
+    return captured.status === 404 ? captured : capabilityStatementResponse();
+  }
+
+  if (!path || path.length === 0) {
+    return NextResponse.json(
+      {
+        error: "This endpoint accepts POST only.",
+        dashboard: `/dashboard/${endpointId}`,
+      },
+      { status: 405, headers: { Allow: "POST" } },
+    );
+  }
+
+  return captured;
+}
+
+/**
  * Always reads the body as text first: an unparseable payload is exactly the
  * case we want to capture and show, so parsing must not be what decides
  * whether we record it.
  */
-export async function POST(
+async function capture(
   request: Request,
-  { params }: { params: Promise<{ endpointId: string }> },
-) {
-  const { endpointId } = await params;
-
+  endpointId: string,
+  path: string[] | undefined,
+): Promise<Response> {
   const endpoint = await store.getEndpoint(endpointId);
   if (!endpoint) {
     return NextResponse.json({ error: "Unknown endpoint" }, { status: 404 });
@@ -39,9 +90,19 @@ export async function POST(
   // previous heartbeat, so the value it measures must be the value stored.
   const receivedAt = new Date().toISOString();
   const contentType = request.headers.get("content-type");
-  // The expectation is read at receive time and recorded on the message below:
-  // changing it later cannot re-grade what has already arrived.
-  const result = validateBody(rawBody, contentType, endpoint.expectedPayloadContent);
+  // A GET is never a Subscription notification — that is always POSTed — so
+  // its (usually absent) body is not graded through the same tiers a POST is.
+  // `.../metadata` gets its own result rather than the generic "unexpected"
+  // one: unlike an arbitrary GET, this one is an ordinary, expected part of
+  // some clients' Subscription setup. The expectation is read at receive time
+  // and recorded on the message below: changing it later cannot re-grade what
+  // has already arrived.
+  const isMetadataProbe = request.method === "GET" && path?.length === 1 && path[0] === "metadata";
+  const result = isMetadataProbe
+    ? metadataProbeResult()
+    : request.method === "GET"
+      ? unexpectedGetResult()
+      : validateBody(rawBody, contentType, endpoint.expectedPayloadContent);
 
   // Arrival against Subscription.end. Read at receive time like the payload
   // expectation, and applied to every message rather than only valid ones: this
@@ -73,6 +134,7 @@ export async function POST(
 
   await store.addMessage(endpointId, {
     receivedAt,
+    method: request.method,
     isValid: result.isValid,
     status,
     statusOverridden: override !== null,
@@ -85,6 +147,7 @@ export async function POST(
     eventsSinceSubscriptionStart: result.eventsSinceSubscriptionStart,
     topic: result.topic,
     focusResourceTypes: result.focusResourceTypes,
+    requestPath: path && path.length > 0 ? path.join("/") : null,
     headers: captureHeaders(request),
     rawBody,
     validationErrors: [...result.validationErrors, ...continuityFindings, ...expiryFindings],
@@ -103,20 +166,5 @@ export async function POST(
       ...(override !== null && { statusOverridden: true }),
     },
     { status },
-  );
-}
-
-/** A GET here is almost always someone pasting the URL into a browser. */
-export async function GET(
-  _request: Request,
-  { params }: { params: Promise<{ endpointId: string }> },
-) {
-  const { endpointId } = await params;
-  return NextResponse.json(
-    {
-      error: "This endpoint accepts POST only.",
-      dashboard: `/dashboard/${endpointId}`,
-    },
-    { status: 405, headers: { Allow: "POST" } },
   );
 }
