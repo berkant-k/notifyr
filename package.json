@@ -38,7 +38,7 @@
     "test:live": "node --env-file=.env.local ./node_modules/vitest/vitest.mjs run tests/store.test.ts"
   },
   "dependencies": {
-    "@upstash/redis": "^1.38.4",
+    "@upstash/redis": "^1.39.0",
     "@vercel/analytics": "^2.0.1",
     "@vercel/speed-insights": "^2.0.0",
     "fhir-tool": "^5.0.2",
