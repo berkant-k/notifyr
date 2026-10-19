@@ -38,13 +38,13 @@
     "test:live": "node --env-file=.env.local ./node_modules/vitest/vitest.mjs run tests/store.test.ts"
   },
   "dependencies": {
-    "@upstash/redis": "^1.38.4",
+    "@upstash/redis": "^1.39.0",
     "@vercel/analytics": "^2.0.1",
     "@vercel/speed-insights": "^2.0.0",
     "fhir-tool": "^5.0.2",
-    "next": "^16.4.0",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "next": "^16.4.2",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.13",
